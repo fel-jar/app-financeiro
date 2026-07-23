@@ -117,7 +117,12 @@ def _mes_seguinte(aaaa_mm: str, n: int) -> str:
     return f"{ano:04d}-{mes:02d}"
 
 
-def construir_panorama_mensal(transacoes: list[dict], saldo: float | None, meses_futuros: int = 5) -> list[dict]:
+def construir_panorama_mensal(
+    transacoes: list[dict],
+    saldo: float | None,
+    gastos_fixos_por_mes: dict[str, list[dict]] | None = None,
+    meses_futuros: int = 5,
+) -> list[dict]:
     """Monta o painel mês a mês: mês atual + próximos `meses_futuros`, cada
     um com fatura de cartão (real no mês atual, projetada nos seguintes),
     fixos, entrada prevista (salário + renda extra) e um saldo de caixa
@@ -135,8 +140,6 @@ def construir_panorama_mensal(transacoes: list[dict], saldo: float | None, meses
     não são parcelamento) ainda vão ser cobrados, então entram por fora.
     """
     mes_atual = datetime.now().strftime("%Y-%m")
-    total_pix = total_fixo_pix()
-    total_cartao_fixo = total_fixo_cartao()
     salario_medio = salario_medio_recente(transacoes) or 0.0
     renda_extra_media = renda_extra_media_recente(transacoes) or 0.0
     entrada_prevista = salario_medio + renda_extra_media
@@ -177,19 +180,29 @@ def construir_panorama_mensal(transacoes: list[dict], saldo: float | None, meses
     linhas = []
     caixa_inicio = saldo
     for i, mes in enumerate(meses_ordenados):
+        # Valores editáveis (via /fixos/<mes>) têm prioridade; sem banco (ex.:
+        # ferramenta standalone puxando direto da Pluggy), cai na lista estática.
+        itens_mes = gastos_fixos_por_mes.get(mes) if gastos_fixos_por_mes else None
+        if itens_mes:
+            total_pix_mes = sum(it["valor"] for it in itens_mes if it["forma"] == "pix")
+            total_cartao_mes = sum(it["valor"] for it in itens_mes if it["forma"] == "cartao")
+        else:
+            total_pix_mes = total_fixo_pix()
+            total_cartao_mes = total_fixo_cartao()
+
         if i == 0:
             fatura_mes = fatura_atual  # já inclui os fixos do cartão reais deste ciclo
-            fixos_cartao_recorrente = total_cartao_fixo  # só exibido, não somado nesse mês
+            fixos_cartao_recorrente = total_cartao_mes  # só exibido, não somado nesse mês
             detalhe = detalhe_atual
         else:
-            fatura_mes = projecao.get(mes, 0.0) + total_cartao_fixo  # parcelas + recorrente assumido
-            fixos_cartao_recorrente = total_cartao_fixo
+            fatura_mes = projecao.get(mes, 0.0) + total_cartao_mes  # parcelas + recorrente assumido
+            fixos_cartao_recorrente = total_cartao_mes
             detalhe = detalhe_futuro.get(mes, [])
 
         # Total necessário = fixos no Pix + fatura do cartão. O fixo recorrente
         # do cartão NÃO entra separado -- já está embutido na fatura (real no
         # mês atual, projetado por fora nos futuros); somar de novo duplicaria.
-        necessario = fatura_mes + total_pix
+        necessario = fatura_mes + total_pix_mes
         saldo_final = None if caixa_inicio is None else caixa_inicio + entrada_prevista - necessario
         cobre = None if caixa_inicio is None else (caixa_inicio + entrada_prevista) >= necessario
 
@@ -197,7 +210,8 @@ def construir_panorama_mensal(transacoes: list[dict], saldo: float | None, meses
             "mes": mes,
             "fatura": fatura_mes,
             "fixos_cartao_recorrente": fixos_cartao_recorrente,
-            "fixos_pix": total_pix,
+            "fixos_pix": total_pix_mes,
+            "fixos_itens": itens_mes,
             "necessario": necessario,
             "salario_medio": salario_medio,
             "renda_extra_media": renda_extra_media,
@@ -281,25 +295,38 @@ def render_categorias_expansivel(detalhe: list[dict]) -> str:
     return linhas
 
 
-def render_fixos_detalhe(titulo: str, forma: str, card: bool = False) -> str:
+def render_fixos_detalhe(
+    titulo: str, forma: str, itens_mes: list[dict] | None = None, mes: str | None = None, card: bool = False
+) -> str:
     """Lista expansível dos gastos fixos de uma forma (pix/cartao). `card`
     controla se vem embrulhado como card de página (uso solo) ou como
-    details simples pra encaixar dentro de outro card (painel do mês)."""
-    itens = [i for i in GASTOS_FIXOS if i.get("forma") == forma]
-    total = sum(valor_planejamento(i) for i in itens)
-    linhas = ""
-    for item in itens:
-        valor = valor_planejamento(item)
-        faixa = ""
-        if "valor_min" in item:
-            faixa = f" (faixa {fmt_brl(item['valor_min'])}–{fmt_brl(item['valor_max'])})"
-        linhas += f"""<tr><td>{item['nome']}{faixa}</td><td class="num">{fmt_brl(valor)}</td></tr>"""
+    details simples pra encaixar dentro de outro card (painel do mês).
+
+    `itens_mes` (vindo do banco, editável em /fixos/<mes>) tem prioridade
+    sobre a lista estática -- sem ele (ferramenta standalone sem banco),
+    cai nos valores padrão de gastos_fixos.py."""
+    if itens_mes is not None:
+        itens = [i for i in itens_mes if i["forma"] == forma]
+        linhas_valores = [(i["nome"], i["valor"], "") for i in itens]
+    else:
+        itens_padrao = [i for i in GASTOS_FIXOS if i.get("forma") == forma]
+        linhas_valores = []
+        for item in itens_padrao:
+            faixa = f" (faixa {fmt_brl(item['valor_min'])}–{fmt_brl(item['valor_max'])})" if "valor_min" in item else ""
+            linhas_valores.append((item["nome"], valor_planejamento(item), faixa))
+
+    total = sum(v for _, v, _ in linhas_valores)
+    linhas = "".join(
+        f"""<tr><td>{nome}{faixa}</td><td class="num">{fmt_brl(valor)}</td></tr>"""
+        for nome, valor, faixa in linhas_valores
+    )
+    editar_link = f' <a class="editar-link" href="/fixos/{mes}">✎ editar</a>' if mes else ""
     classe = "card" if card else "detalhe-fatura"
     return f"""
   <details class="{classe}">
     <summary>
       <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
-        <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">{titulo}</span>
+        <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">{titulo}{editar_link}</span>
         <span class="cat-valor" style="font-size:14px;">{fmt_brl(total)}</span>
       </div>
     </summary>
@@ -341,8 +368,8 @@ def render_mes_panorama(linha: dict, aberto: bool) -> str:
     detalhe_html = render_categorias_expansivel(linha["detalhe"])
     saldo_final_classe = "good" if (linha["saldo_final"] or 0) >= 0 else "critical"
     open_attr = " open" if aberto else ""
-    fixos_pix_html = render_fixos_detalhe("Fixos no Pix", "pix")
-    fixos_cartao_html = render_fixos_detalhe("Fixos no cartão recorrente", "cartao")
+    fixos_pix_html = render_fixos_detalhe("Fixos no Pix", "pix", linha.get("fixos_itens"), mes=linha["mes"])
+    fixos_cartao_html = render_fixos_detalhe("Fixos no cartão recorrente", "cartao", linha.get("fixos_itens"), mes=linha["mes"])
     entrada_html = render_entrada_detalhe(linha)
 
     return f"""
@@ -373,15 +400,19 @@ def render_mes_panorama(linha: dict, aberto: bool) -> str:
   </details>"""
 
 
-def montar_html(transacoes: list[dict], saldo: float | None) -> str:
+def montar_html(
+    transacoes: list[dict], saldo: float | None, gastos_fixos_por_mes: dict[str, list[dict]] | None = None
+) -> str:
     meses = agregar_por_mes(transacoes)
     categorias = agregar_categorias_despesa(transacoes)
     total_receita = sum(v["receita"] for v in meses.values())
     total_despesa = sum(v["despesa"] for v in meses.values())
     resultado = total_receita - total_despesa
 
-    panorama = construir_panorama_mensal(transacoes, saldo)
-    total_fixo = total_fixo_mensal()
+    panorama = construir_panorama_mensal(transacoes, saldo, gastos_fixos_por_mes)
+    mes_atual = datetime.now().strftime("%Y-%m")
+    itens_mes_atual = gastos_fixos_por_mes.get(mes_atual) if gastos_fixos_por_mes else None
+    total_fixo = sum(i["valor"] for i in itens_mes_atual) if itens_mes_atual else total_fixo_mensal()
 
     salario_medio = salario_medio_recente(transacoes)
     renda_extra_media = renda_extra_media_recente(transacoes)
@@ -579,7 +610,10 @@ def montar_html(transacoes: list[dict], saldo: float | None) -> str:
       <h1>Dashboard de Fluxo de Caixa</h1>
       <div class="subtitulo">Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}</div>
     </div>
-    <button id="toggle-tema" onclick="alternarTema()">Alternar tema</button>
+    <div style="display:flex; align-items:center; gap:14px;">
+      <a href="/orcamento" class="editar-link" style="font-size:13px;">Orçamento por categoria</a>
+      <button id="toggle-tema" onclick="alternarTema()">Alternar tema</button>
+    </div>
   </header>
 
   <div class="tiles">

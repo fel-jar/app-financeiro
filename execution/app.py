@@ -8,7 +8,7 @@ Em produção (VPS): servido via gunicorn atrás do Traefik (ver Dockerfile).
 from flask import Flask, redirect, request
 
 import db
-from dados_db import carregar_transacoes_do_banco
+from dados_db import carregar_transacoes_do_banco, carregar_gastos_fixos_do_banco
 from gerar_dashboard import montar_html, fmt_brl
 from normalizacao import traduzir_categoria
 
@@ -34,7 +34,8 @@ ESTILO_PAGINA_SIMPLES = """
 @app.route("/")
 def dashboard():
     transacoes, saldo = carregar_transacoes_do_banco()
-    return montar_html(transacoes, saldo)
+    gastos_fixos_por_mes = carregar_gastos_fixos_do_banco()
+    return montar_html(transacoes, saldo, gastos_fixos_por_mes)
 
 
 @app.route("/transacao/<transacao_id>/editar", methods=["GET", "POST"])
