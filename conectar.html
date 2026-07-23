@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<title>Conectar conta - App Financeiro</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.pluggy.ai/pluggy-connect/v2.7.0/pluggy-connect.js"></script>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; max-width: 480px;
+         margin: 60px auto; padding: 0 20px; }
+  #resultado { display: none; margin-top: 24px; padding: 16px; border-radius: 8px;
+               background: #eafaf0; border: 1px solid #0ca30c; }
+  #resultado code { display: block; margin-top: 8px; padding: 8px; background: #fff;
+                     border-radius: 4px; word-break: break-all; }
+  button { padding: 10px 18px; border-radius: 6px; border: none; background: #2a78d6;
+           color: #fff; font-size: 14px; cursor: pointer; }
+</style>
+</head>
+<body>
+  <h1>Conectar sua conta</h1>
+  <p>Clique no botão e faça login no seu banco/cartão pela tela oficial do Pluggy.
+     Sua senha nunca passa pelo nosso script.</p>
+  <button onclick="pluggyConnect.init()">Conectar conta</button>
+
+  <div id="resultado">
+    <strong>Conectado! Item ID:</strong>
+    <code id="item-id"></code>
+    <p>Copie esse valor e me envie (ou coloque direto em <code>PLUGGY_ITEM_ID</code> no .env).</p>
+  </div>
+
+  <script>
+    const pluggyConnect = new PluggyConnect({
+      connectToken: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJjbGllbnRJZCI6Ijg3ZWVjOGViLTlhZGMtNGZiNC04MGIxLWY0NTUxNmE5YjMwOSIsImRhdGEiOiJkMmJmOTIyYTRmMmE0MTYzZGVjN2EwYTFkZTUzYTFlZjo3NTczNGI4YmU1Yzg1NGZhMTUyODkyM2E1Y2VhYzUzMjcxYTcyZjIxNDE4ZmU1MTcxNTdiZWExNzdlYTQwNWIwMzFiYjFhZmJhZDU3YzlmZjBjMDc3MWYyNzQ2OTBjYmQ5ODNmNzBlODdhZTBkMmE5NDEyNTU3NGU4Yzc1NmYyOGViNDU4OThiZWY5ODA5YTM2OGM1OWI3MWRhMTAxYzQ0OGIxN2RjMmQ4MmFjZWJlYjlhN2U4OGZlMTA5NDhmMDQzNzBlZWU5YjIyYTI3ODEzZDYyNzE1YWVhZmJiNjcyYmIxYjdiYjRjZWYzNThkYjgwOWEyYmZjYjE5NmJhNzAyIiwiaWF0IjoxNzg0NjU0NTA3LCJleHAiOjE3ODQ2NTYzMDd9.fwccKkB1w_vNxzm4Ak9_kfUWsqjOhrkGG2djc83y5NBQRua86yiy45LzafXHwNKemVoVhk7PLkKTw7aKWOpGFP7teRGV-AbjqZ9iIf7c92KIM_iCIvcivE8CV7dbqoBqwy_xQNzDHtkwu5u1e4hstDcH3_Mpu1m0_GTnzR9i-yCnWBPV6an6HzLICuDdLh9s8pL03rkWjgAYojq71sy0S4FUVD_yiGPrI_v1qkl3zsCoOO1EX3yRC5Z23Ug_z1lxmPv8Avd5fz4gZIYojalhs2PtTiOtDbyN8NkjnYCmbkDWGzxTvnx7ROtJandJzR-ilFlFPUXjUy5iuY9Lcni5nQ",
+      includeSandbox: false,
+      onSuccess: (itemData) => {
+        document.getElementById('item-id').textContent = itemData.item.id;
+        document.getElementById('resultado').style.display = 'block';
+      },
+      onError: (error) => {
+        alert('Erro ao conectar: ' + JSON.stringify(error));
+      },
+    });
+  </script>
+</body>
+</html>

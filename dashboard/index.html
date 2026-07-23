@@ -1,0 +1,2173 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<title>Dashboard de Fluxo de Caixa</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1: #fcfcfb; --page: #f9f9f7;
+    --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+    --receita: #2a78d6; --despesa: #e34948;
+    --good: #0ca30c; --critical: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface-1: #1a1a19; --page: #0d0d0d;
+      --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+      --receita: #3987e5; --despesa: #e66767;
+      --good: #0ca30c; --critical: #e66767;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1: #1a1a19; --page: #0d0d0d;
+    --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --receita: #3987e5; --despesa: #e66767;
+    --good: #0ca30c; --critical: #e66767;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 24px 64px; background: var(--page); color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 24px; }
+  h1 { font-size: 20px; margin: 0; }
+  .subtitulo { color: var(--text-secondary); font-size: 13px; }
+  #toggle-tema {
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-secondary);
+    border-radius: 6px; padding: 6px 10px; font-size: 12px; cursor: pointer;
+  }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 28px; }
+  .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .tile .label { color: var(--text-secondary); font-size: 12px; margin-bottom: 6px; }
+  .tile .valor { font-size: 22px; font-weight: 600; }
+  .tile .valor.good { color: var(--good); }
+  .tile .valor.critical { color: var(--critical); }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 20px; }
+  .card h2 { font-size: 14px; margin: 0 0 16px; color: var(--text-secondary); font-weight: 600; }
+  .legenda { display: flex; gap: 16px; margin-bottom: 12px; font-size: 12px; color: var(--text-secondary); }
+  .legenda span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .dot.receita { background: var(--receita); }
+  .dot.despesa { background: var(--despesa); }
+  .chart-mensal {
+    display: flex; align-items: flex-end; gap: 18px; height: 180px; padding-top: 10px;
+    border-bottom: 1px solid var(--axis); overflow-x: auto;
+  }
+  .grupo-mes { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 44px; }
+  .barras { display: flex; align-items: flex-end; gap: 2px; height: 160px; }
+  .barra { width: 18px; border-radius: 4px 4px 0 0; cursor: pointer; }
+  .barra.receita { background: var(--receita); }
+  .barra.despesa { background: var(--despesa); }
+  .mes-label { font-size: 11px; color: var(--text-muted); }
+  .linha-cat { display: grid; grid-template-columns: 110px 1fr 90px; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .cat-label { font-size: 13px; color: var(--text-secondary); }
+  .cat-track { background: var(--grid); border-radius: 4px; height: 14px; }
+  .cat-barra { background: var(--despesa); height: 14px; border-radius: 4px; cursor: pointer; }
+  .cat-valor { font-size: 12px; color: var(--text-secondary); text-align: right; font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  summary { cursor: pointer; color: var(--text-secondary); font-size: 13px; margin-bottom: 8px; }
+  #tooltip {
+    position: fixed; display: none; background: var(--text-primary); color: var(--surface-1);
+    font-size: 12px; padding: 4px 8px; border-radius: 4px; pointer-events: none; z-index: 10;
+  }
+  .secao-titulo { font-size: 14px; margin: 28px 0 12px; color: var(--text-secondary); font-weight: 600; }
+  .badge { font-size: 11px; padding: 3px 8px; border-radius: 999px; font-weight: 600; }
+  .badge.good { background: rgba(12,163,12,0.15); color: var(--good); }
+  .badge.critical { background: rgba(211,59,59,0.15); color: var(--critical); }
+  .mes-panorama summary { display: flex; justify-content: space-between; align-items: center; list-style: revert; }
+  .mes-panorama-titulo { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+  .detalhe-fatura summary { font-size: 12px; }
+  .cat-detalhe { margin-bottom: 4px; }
+  .cat-detalhe summary { margin-bottom: 4px; list-style: revert; }
+  .cat-detalhe summary::marker { font-size: 11px; }
+  .cat-detalhe .linha-cat { margin-bottom: 0; }
+  .tabela-detalhe { margin: 4px 0 12px 18px; width: calc(100% - 18px); }
+  details.card summary { list-style: revert; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Dashboard de Fluxo de Caixa</h1>
+      <div class="subtitulo">Gerado em 22/07/2026 20:04</div>
+    </div>
+    <button id="toggle-tema" onclick="alternarTema()">Alternar tema</button>
+  </header>
+
+  <div class="tiles">
+    <div class="tile"><div class="label">Caixa disponível</div><div class="valor">R$ 18.576,05</div></div>
+    <div class="tile"><div class="label">Salário médio</div><div class="valor">R$ 10.563,53</div></div>
+    <div class="tile"><div class="label">Renda extra média</div><div class="valor">R$ 2.335,26</div></div>
+    <div class="tile"><div class="label">Sobra com renda extra (antes do variável)</div><div class="valor good">R$ 1.429,25</div></div>
+  </div>
+
+  <h2 class="secao-titulo">Panorama mês a mês</h2>
+  
+  <details class="card mes-panorama" open>
+    <summary>
+      <span class="mes-panorama-titulo">Jul/26</span>
+      <span class="badge good">Cobre</span>
+    </summary>
+    <div class="tiles" style="margin-top:14px;">
+      <div class="tile"><div class="label">Total necessário</div><div class="valor">R$ 19.648,15</div></div>
+      <div class="tile"><div class="label">Caixa no início do mês</div><div class="valor">R$ 18.576,05</div></div>
+      <div class="tile"><div class="label">Saldo projetado no fim do mês</div><div class="valor good">R$ 11.826,68</div></div>
+    </div>
+    <div style="margin-top:14px;">
+      
+  <details class="detalhe-fatura">
+    <summary>
+      <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+        <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Fixos no Pix</span>
+        <span class="cat-valor" style="font-size:14px;">R$ 6.180,70</span>
+      </div>
+    </summary>
+    <table class="tabela-detalhe">
+      <tbody><tr><td>Psicóloga</td><td class="num">R$ 720,00</td></tr><tr><td>Financiamento carro</td><td class="num">R$ 2.760,56</td></tr><tr><td>Internet</td><td class="num">R$ 99,90</td></tr><tr><td>Condomínio</td><td class="num">R$ 1.162,63</td></tr><tr><td>Luz (faixa R$ 600,00–R$ 900,00)</td><td class="num">R$ 900,00</td></tr><tr><td>PNR</td><td class="num">R$ 334,11</td></tr><tr><td>IR</td><td class="num">R$ 203,50</td></tr>
+        <tr><td><strong>Total</strong></td><td class="num"><strong>R$ 6.180,70</strong></td></tr>
+      </tbody>
+    </table>
+  </details>
+      
+  <details class="detalhe-fatura">
+    <summary>
+      <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+        <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Fixos no cartão recorrente</span>
+        <span class="cat-valor" style="font-size:14px;">R$ 5.288,83</span>
+      </div>
+    </summary>
+    <table class="tabela-detalhe">
+      <tbody><tr><td>Vivo</td><td class="num">R$ 93,00</td></tr><tr><td>Faculdade</td><td class="num">R$ 829,19</td></tr><tr><td>Escolinha do Guel</td><td class="num">R$ 1.917,14</td></tr><tr><td>Tim</td><td class="num">R$ 56,80</td></tr><tr><td>Combustível (faixa R$ 400,00–R$ 500,00)</td><td class="num">R$ 500,00</td></tr><tr><td>Mercado (faixa R$ 1.600,00–R$ 1.800,00)</td><td class="num">R$ 1.800,00</td></tr><tr><td>YouTube Premium</td><td class="num">R$ 33,80</td></tr><tr><td>Spotify</td><td class="num">R$ 12,90</td></tr><tr><td>Smiles</td><td class="num">R$ 46,00</td></tr>
+        <tr><td><strong>Total</strong></td><td class="num"><strong>R$ 5.288,83</strong></td></tr>
+      </tbody>
+    </table>
+  </details>
+      <details class="detalhe-fatura">
+        <summary>
+          <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+            <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Fatura do cartão</span>
+            <span class="cat-valor" style="font-size:14px;">R$ 13.467,45</span>
+          </div>
+        </summary>
+        <div style="margin-top:10px;">
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Eletrônicos</span>
+              <div class="cat-track"><div class="cat-barra" style="width:100.0%"></div></div>
+              <span class="cat-valor">R$ 5.064,44</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *WEWELIFE (8/12)</td><td class="num">R$ 302,65</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (1/18)</td><td class="num">R$ 250,02</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (9/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (5/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (11/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (3/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (18/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (14/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (10/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (17/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (15/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (16/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (7/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (12/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (4/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (2/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (6/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (13/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (8/18)</td><td class="num">R$ 249,94</td></tr><tr><td>EC*SAMSUNG (8/18)</td><td class="num">R$ 211,05</td></tr><tr><td>SHOPEE *amsodloja (3/7)</td><td class="num">R$ 51,74</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Livraria</span>
+              <div class="cat-track"><div class="cat-barra" style="width:28.3%"></div></div>
+              <span class="cat-valor">R$ 1.434,62</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>AMAZON BR (5/10)</td><td class="num">R$ 152,99</td></tr><tr><td>S2P*1BIBLIOTECACA (7/12)</td><td class="num">R$ 151,90</td></tr><tr><td>AMAZON MARKETPLACE  CC (3/6)</td><td class="num">R$ 126,56</td></tr><tr><td>AMAZON MARKETPLACE  CC (8/12)</td><td class="num">R$ 119,87</td></tr><tr><td>KIWIFY*ClaudeCode (2/2)</td><td class="num">R$ 84,19</td></tr><tr><td>S2P*1BIBLIOTECACA (7/12)</td><td class="num">R$ 79,90</td></tr><tr><td>AMAZON MARKETPLACE  CC (6/10)</td><td class="num">R$ 59,72</td></tr><tr><td>AMAZON MARKETPLACE  CC (4/6)</td><td class="num">R$ 56,76</td></tr><tr><td>AMAZON MARKETPLACE  CC (6/7)</td><td class="num">R$ 56,62</td></tr><tr><td>AMAZON BR (3/10)</td><td class="num">R$ 52,30</td></tr><tr><td>AMAZON MARKETPLACE  CC (7/9)</td><td class="num">R$ 51,82</td></tr><tr><td>AMAZON BR (5/7)</td><td class="num">R$ 51,56</td></tr><tr><td>AMAZON BR (4/6)</td><td class="num">R$ 50,28</td></tr><tr><td>AMAZON BR (7/8)</td><td class="num">R$ 50,20</td></tr><tr><td>AMAZON BR (4/6)</td><td class="num">R$ 49,96</td></tr><tr><td>AMAZON BR (6/6)</td><td class="num">R$ 46,20</td></tr><tr><td>AMAZON BR (5/6)</td><td class="num">R$ 45,99</td></tr><tr><td>AMAZON BR (6/6)</td><td class="num">R$ 44,26</td></tr><tr><td>AMAZON CPI  *Amazon BR (1/2)</td><td class="num">R$ 40,94</td></tr><tr><td>AMAZON BR   *Amazon BR (1/4)</td><td class="num">R$ 34,81</td></tr><tr><td>PARC=110LEITURA (7/10)</td><td class="num">R$ 27,79</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Serviços</span>
+              <div class="cat-track"><div class="cat-barra" style="width:27.7%"></div></div>
+              <span class="cat-valor">R$ 1.405,08</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>BEEP SAUDE (2/3)</td><td class="num">R$ 263,75</td></tr><tr><td>HTM*PADRAOAB (4/6)</td><td class="num">R$ 143,89</td></tr><tr><td>HTM*PADRAOAB (6/6)</td><td class="num">R$ 143,89</td></tr><tr><td>HTM*PADRAOAB (3/6)</td><td class="num">R$ 143,89</td></tr><tr><td>HTM*PADRAOAB (2/6)</td><td class="num">R$ 143,89</td></tr><tr><td>HTM*PADRAOAB (5/6)</td><td class="num">R$ 143,89</td></tr><tr><td>HTM*PADRAOAB (1/6)</td><td class="num">R$ 143,89</td></tr><tr><td>PG *CONTAJA CONTA (3/12)</td><td class="num">R$ 137,40</td></tr><tr><td>IG*CompanyHero (2/12)</td><td class="num">R$ 55,51</td></tr><tr><td>CEDET  *livro-2106241 (2/6)</td><td class="num">R$ 47,49</td></tr><tr><td>PG *LESEN LIVRARI (4/10)</td><td class="num">R$ 37,59</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Compras</span>
+              <div class="cat-track"><div class="cat-barra" style="width:15.7%"></div></div>
+              <span class="cat-valor">R$ 794,63</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>JIM.COM RAFFINEE JOALHERI (8/8)</td><td class="num">R$ 118,75</td></tr><tr><td>SHOPEE *JR905 (6/12)</td><td class="num">R$ 98,83</td></tr><tr><td>SHOPEE *CriptoBikes (5/12)</td><td class="num">R$ 88,56</td></tr><tr><td>PG *SANTHATELA SA (4/6)</td><td class="num">R$ 85,88</td></tr><tr><td>MERCADOLIVRE*MERCADOLIVRE (1/2)</td><td class="num">R$ 68,62</td></tr><tr><td>AMAZONMKTPLC*RCPRODUTO (6/10)</td><td class="num">R$ 68,47</td></tr><tr><td>SHOPEE *MIMORADASTORE (6/7)</td><td class="num">R$ 65,69</td></tr><tr><td>AMAZONMKTPLC*AMPLASELE (5/6)</td><td class="num">R$ 43,96</td></tr><tr><td>MP *GROWTHSUPPLEMENTS (3/6)</td><td class="num">R$ 41,30</td></tr><tr><td>AMAZONMKTPLC*Amazon BR (1/4)</td><td class="num">R$ 33,82</td></tr><tr><td>MERCADOLIVRE*NIAD (1/5)</td><td class="num">R$ 31,52</td></tr><tr><td>MERCADOLIVRE*3PRODUTOS (3/4)</td><td class="num">R$ 29,26</td></tr><tr><td>MERCADOLIVRE*MERCADOLIVRE (1/2)</td><td class="num">R$ 19,97</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Serviços digitais</span>
+              <div class="cat-track"><div class="cat-barra" style="width:15.3%"></div></div>
+              <span class="cat-valor">R$ 774,24</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>MESTRADOIAHUB (12/12)</td><td class="num">R$ 750,00</td></tr><tr><td>EBN    *Canva04928 44 (1/12)</td><td class="num">R$ 24,24</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Casa e decoração</span>
+              <div class="cat-track"><div class="cat-barra" style="width:10.7%"></div></div>
+              <span class="cat-valor">R$ 543,41</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *LORRANIBABY (1/2)</td><td class="num">R$ 79,10</td></tr><tr><td>MLP*Magalu Loja M (8/9)</td><td class="num">R$ 74,69</td></tr><tr><td>SHOPEE *MADEIRAMADEIRA (6/12)</td><td class="num">R$ 67,92</td></tr><tr><td>SHOPEE *COZYAMESUACASA (8/8)</td><td class="num">R$ 66,39</td></tr><tr><td>SHOPEE *RCDecoraes (7/12)</td><td class="num">R$ 66,36</td></tr><tr><td>SHOPEE *ESSENCIALDETAL (8/11)</td><td class="num">R$ 64,67</td></tr><tr><td>SHOPEE *CasaDomo (7/9)</td><td class="num">R$ 63,11</td></tr><tr><td>SHOPEE *CAETANOENXOVAI (8/9)</td><td class="num">R$ 61,17</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Mercado</span>
+              <div class="cat-track"><div class="cat-barra" style="width:10.3%"></div></div>
+              <span class="cat-valor">R$ 522,91</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SWIFT RECREIO (1/4)</td><td class="num">R$ 135,97</td></tr><tr><td>SEARA ALIMENTOS LTDA (1/4)</td><td class="num">R$ 116,83</td></tr><tr><td>SWIFT RECREIO (3/4)</td><td class="num">R$ 104,56</td></tr><tr><td>CARREFOUR COM (1/8)</td><td class="num">R$ 71,69</td></tr><tr><td>SHOPEE *MaxTitanium (6/9)</td><td class="num">R$ 61,49</td></tr><tr><td>CARREFOUR SULACAP (8/8)</td><td class="num">R$ 32,37</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Escola</span>
+              <div class="cat-track"><div class="cat-barra" style="width:9.8%"></div></div>
+              <span class="cat-valor">R$ 495,50</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>KIWIFY *ComunRatos (1/2)</td><td class="num">R$ 210,53</td></tr><tr><td>PG *ESTRATEGIACON (7/12)</td><td class="num">R$ 104,90</td></tr><tr><td>KIWIFY *TriboQueLe (8/12)</td><td class="num">R$ 103,11</td></tr><tr><td>KIWIFY*RatosOS (1/2)</td><td class="num">R$ 51,06</td></tr><tr><td>QCONCURSOS (7/12)</td><td class="num">R$ 25,90</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Hospedagem</span>
+              <div class="cat-track"><div class="cat-barra" style="width:9.2%"></div></div>
+              <span class="cat-valor">R$ 465,33</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>HOTEL FAZENDA LAGOS DO (2/6)</td><td class="num">R$ 465,33</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Vestuário</span>
+              <div class="cat-track"><div class="cat-barra" style="width:6.5%"></div></div>
+              <span class="cat-valor">R$ 327,71</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *EcomBeleza (7/12)</td><td class="num">R$ 118,70</td></tr><tr><td>ALFAIATARIA SAO L (5/6)</td><td class="num">R$ 70,00</td></tr><tr><td>SHOPEE *VYJeans (3/6)</td><td class="num">R$ 55,65</td></tr><tr><td>SHOPEE *AzzevicheTrico (3/6)</td><td class="num">R$ 51,07</td></tr><tr><td>AMAZONMKTPLC*GABRIELAR (4/5)</td><td class="num">R$ 32,29</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Saúde</span>
+              <div class="cat-track"><div class="cat-barra" style="width:6.3%"></div></div>
+              <span class="cat-valor">R$ 318,16</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>JIM.COM GABRIEL FERREIRA (3/6)</td><td class="num">R$ 318,16</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Material de escritório</span>
+              <div class="cat-track"><div class="cat-barra" style="width:6.1%"></div></div>
+              <span class="cat-valor">R$ 310,22</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *LOJAEASYHOUSE (8/12)</td><td class="num">R$ 199,94</td></tr><tr><td>SHOPEE *LOJAEASYHOUSE (8/12)</td><td class="num">R$ 71,45</td></tr><tr><td>AMAZONMKTPLC*BIANCASTE (5/6)</td><td class="num">R$ 38,83</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Artigos esportivos</span>
+              <div class="cat-track"><div class="cat-barra" style="width:6.0%"></div></div>
+              <span class="cat-valor">R$ 305,95</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>EC *KEEPRUNNING (4/5)</td><td class="num">R$ 170,98</td></tr><tr><td>MLP*Netshoes NS2C (3/8)</td><td class="num">R$ 74,99</td></tr><tr><td>MP*VELOCITA (6/10)</td><td class="num">R$ 59,98</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Educação</span>
+              <div class="cat-track"><div class="cat-barra" style="width:4.1%"></div></div>
+              <span class="cat-valor">R$ 208,95</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>HTM*Fellipe Sales-C (1/2)</td><td class="num">R$ 208,95</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Óptica</span>
+              <div class="cat-track"><div class="cat-barra" style="width:2.4%"></div></div>
+              <span class="cat-valor">R$ 124,02</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>OticasRIz (7/10)</td><td class="num">R$ 70,00</td></tr><tr><td>ESGH I L00570 I EOTICA (6/10)</td><td class="num">R$ 54,02</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Seguro</span>
+              <div class="cat-track"><div class="cat-barra" style="width:2.0%"></div></div>
+              <span class="cat-valor">R$ 100,03</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>AZUL SEGUROS (7/7)</td><td class="num">R$ 100,03</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Bicicleta</span>
+              <div class="cat-track"><div class="cat-barra" style="width:1.6%"></div></div>
+              <span class="cat-valor">R$ 80,43</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>CP *AMIGAO 21 SH SULAC (8/10)</td><td class="num">R$ 46,86</td></tr><tr><td>CP *AMIGAO 21 SH SULAC (7/10)</td><td class="num">R$ 33,57</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Brinquedos e infantil</span>
+              <div class="cat-track"><div class="cat-barra" style="width:1.3%"></div></div>
+              <span class="cat-valor">R$ 64,89</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *CompanyFT (6/7)</td><td class="num">R$ 64,89</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Compras online</span>
+              <div class="cat-track"><div class="cat-barra" style="width:1.3%"></div></div>
+              <span class="cat-valor">R$ 63,60</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *EasyTech (7/9)</td><td class="num">R$ 63,60</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Farmácia</span>
+              <div class="cat-track"><div class="cat-barra" style="width:0.8%"></div></div>
+              <span class="cat-valor">R$ 42,33</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>CORPUS SANO (2/3)</td><td class="num">R$ 42,33</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Manutenção do veículo</span>
+              <div class="cat-track"><div class="cat-barra" style="width:0.4%"></div></div>
+              <span class="cat-valor">R$ 21,00</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>MERCADO PAGO*RENO (1/3)</td><td class="num">R$ 21,00</td></tr></tbody></table>
+        </details></div>
+      </details>
+      
+  <details class="detalhe-fatura">
+    <summary>
+      <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+        <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Entrada prevista</span>
+        <span class="cat-valor" style="font-size:14px;">R$ 12.898,78</span>
+      </div>
+    </summary>
+    <table class="tabela-detalhe">
+      <tbody>
+        <tr><td>Salário médio (últimos meses fechados)</td><td class="num">R$ 10.563,53</td></tr>
+        <tr><td>Renda extra média (assessoria)</td><td class="num">R$ 2.335,26</td></tr>
+        <tr><td><strong>Total</strong></td><td class="num"><strong>R$ 12.898,78</strong></td></tr>
+      </tbody>
+    </table>
+  </details>
+    </div>
+  </details>
+  <details class="card mes-panorama">
+    <summary>
+      <span class="mes-panorama-titulo">Ago/26</span>
+      <span class="badge good">Cobre</span>
+    </summary>
+    <div class="tiles" style="margin-top:14px;">
+      <div class="tile"><div class="label">Total necessário</div><div class="valor">R$ 23.300,96</div></div>
+      <div class="tile"><div class="label">Caixa no início do mês</div><div class="valor">R$ 11.826,68</div></div>
+      <div class="tile"><div class="label">Saldo projetado no fim do mês</div><div class="valor good">R$ 1.424,51</div></div>
+    </div>
+    <div style="margin-top:14px;">
+      
+  <details class="detalhe-fatura">
+    <summary>
+      <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+        <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Fixos no Pix</span>
+        <span class="cat-valor" style="font-size:14px;">R$ 6.180,70</span>
+      </div>
+    </summary>
+    <table class="tabela-detalhe">
+      <tbody><tr><td>Psicóloga</td><td class="num">R$ 720,00</td></tr><tr><td>Financiamento carro</td><td class="num">R$ 2.760,56</td></tr><tr><td>Internet</td><td class="num">R$ 99,90</td></tr><tr><td>Condomínio</td><td class="num">R$ 1.162,63</td></tr><tr><td>Luz (faixa R$ 600,00–R$ 900,00)</td><td class="num">R$ 900,00</td></tr><tr><td>PNR</td><td class="num">R$ 334,11</td></tr><tr><td>IR</td><td class="num">R$ 203,50</td></tr>
+        <tr><td><strong>Total</strong></td><td class="num"><strong>R$ 6.180,70</strong></td></tr>
+      </tbody>
+    </table>
+  </details>
+      
+  <details class="detalhe-fatura">
+    <summary>
+      <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+        <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Fixos no cartão recorrente</span>
+        <span class="cat-valor" style="font-size:14px;">R$ 5.288,83</span>
+      </div>
+    </summary>
+    <table class="tabela-detalhe">
+      <tbody><tr><td>Vivo</td><td class="num">R$ 93,00</td></tr><tr><td>Faculdade</td><td class="num">R$ 829,19</td></tr><tr><td>Escolinha do Guel</td><td class="num">R$ 1.917,14</td></tr><tr><td>Tim</td><td class="num">R$ 56,80</td></tr><tr><td>Combustível (faixa R$ 400,00–R$ 500,00)</td><td class="num">R$ 500,00</td></tr><tr><td>Mercado (faixa R$ 1.600,00–R$ 1.800,00)</td><td class="num">R$ 1.800,00</td></tr><tr><td>YouTube Premium</td><td class="num">R$ 33,80</td></tr><tr><td>Spotify</td><td class="num">R$ 12,90</td></tr><tr><td>Smiles</td><td class="num">R$ 46,00</td></tr>
+        <tr><td><strong>Total</strong></td><td class="num"><strong>R$ 5.288,83</strong></td></tr>
+      </tbody>
+    </table>
+  </details>
+      <details class="detalhe-fatura">
+        <summary>
+          <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+            <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Fatura do cartão</span>
+            <span class="cat-valor" style="font-size:14px;">R$ 17.120,26</span>
+          </div>
+        </summary>
+        <div style="margin-top:10px;">
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Eletrônicos</span>
+              <div class="cat-track"><div class="cat-barra" style="width:100.0%"></div></div>
+              <span class="cat-valor">R$ 4.814,50</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *WEWELIFE (9/12)</td><td class="num">R$ 302,65</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (2/18)</td><td class="num">R$ 250,02</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (10/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (6/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (12/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (4/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (15/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (11/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (18/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (16/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (17/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (8/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (13/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (5/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (3/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (7/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (14/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (9/18)</td><td class="num">R$ 249,94</td></tr><tr><td>EC*SAMSUNG (9/18)</td><td class="num">R$ 211,05</td></tr><tr><td>SHOPEE *amsodloja (4/7)</td><td class="num">R$ 51,74</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Serviços</span>
+              <div class="cat-track"><div class="cat-barra" style="width:26.2%"></div></div>
+              <span class="cat-valor">R$ 1.261,19</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>BEEP SAUDE (3/3)</td><td class="num">R$ 263,75</td></tr><tr><td>HTM*PADRAOAB (5/6)</td><td class="num">R$ 143,89</td></tr><tr><td>HTM*PADRAOAB (4/6)</td><td class="num">R$ 143,89</td></tr><tr><td>HTM*PADRAOAB (3/6)</td><td class="num">R$ 143,89</td></tr><tr><td>HTM*PADRAOAB (6/6)</td><td class="num">R$ 143,89</td></tr><tr><td>HTM*PADRAOAB (2/6)</td><td class="num">R$ 143,89</td></tr><tr><td>PG *CONTAJA CONTA (4/12)</td><td class="num">R$ 137,40</td></tr><tr><td>IG*CompanyHero (3/12)</td><td class="num">R$ 55,51</td></tr><tr><td>CEDET  *livro-2106241 (3/6)</td><td class="num">R$ 47,49</td></tr><tr><td>PG *LESEN LIVRARI (5/10)</td><td class="num">R$ 37,59</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Livraria</span>
+              <div class="cat-track"><div class="cat-barra" style="width:26.2%"></div></div>
+              <span class="cat-valor">R$ 1.259,97</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>AMAZON BR (6/10)</td><td class="num">R$ 152,99</td></tr><tr><td>S2P*1BIBLIOTECACA (8/12)</td><td class="num">R$ 151,90</td></tr><tr><td>AMAZON MARKETPLACE  CC (4/6)</td><td class="num">R$ 126,56</td></tr><tr><td>AMAZON MARKETPLACE  CC (9/12)</td><td class="num">R$ 119,87</td></tr><tr><td>S2P*1BIBLIOTECACA (8/12)</td><td class="num">R$ 79,90</td></tr><tr><td>AMAZON MARKETPLACE  CC (7/10)</td><td class="num">R$ 59,72</td></tr><tr><td>AMAZON MARKETPLACE  CC (5/6)</td><td class="num">R$ 56,76</td></tr><tr><td>AMAZON MARKETPLACE  CC (7/7)</td><td class="num">R$ 56,62</td></tr><tr><td>AMAZON BR (4/10)</td><td class="num">R$ 52,30</td></tr><tr><td>AMAZON MARKETPLACE  CC (8/9)</td><td class="num">R$ 51,82</td></tr><tr><td>AMAZON BR (6/7)</td><td class="num">R$ 51,56</td></tr><tr><td>AMAZON BR (5/6)</td><td class="num">R$ 50,28</td></tr><tr><td>AMAZON BR (8/8)</td><td class="num">R$ 50,20</td></tr><tr><td>AMAZON BR (5/6)</td><td class="num">R$ 49,96</td></tr><tr><td>AMAZON BR (6/6)</td><td class="num">R$ 45,99</td></tr><tr><td>AMAZON CPI  *Amazon BR (2/2)</td><td class="num">R$ 40,94</td></tr><tr><td>AMAZON BR   *Amazon BR (2/4)</td><td class="num">R$ 34,81</td></tr><tr><td>PARC=110LEITURA (8/10)</td><td class="num">R$ 27,79</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Compras</span>
+              <div class="cat-track"><div class="cat-barra" style="width:14.0%"></div></div>
+              <span class="cat-valor">R$ 675,88</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *JR905 (7/12)</td><td class="num">R$ 98,83</td></tr><tr><td>SHOPEE *CriptoBikes (6/12)</td><td class="num">R$ 88,56</td></tr><tr><td>PG *SANTHATELA SA (5/6)</td><td class="num">R$ 85,88</td></tr><tr><td>MERCADOLIVRE*MERCADOLIVRE (2/2)</td><td class="num">R$ 68,62</td></tr><tr><td>AMAZONMKTPLC*RCPRODUTO (7/10)</td><td class="num">R$ 68,47</td></tr><tr><td>SHOPEE *MIMORADASTORE (7/7)</td><td class="num">R$ 65,69</td></tr><tr><td>AMAZONMKTPLC*AMPLASELE (6/6)</td><td class="num">R$ 43,96</td></tr><tr><td>MP *GROWTHSUPPLEMENTS (4/6)</td><td class="num">R$ 41,30</td></tr><tr><td>AMAZONMKTPLC*Amazon BR (2/4)</td><td class="num">R$ 33,82</td></tr><tr><td>MERCADOLIVRE*NIAD (2/5)</td><td class="num">R$ 31,52</td></tr><tr><td>MERCADOLIVRE*3PRODUTOS (4/4)</td><td class="num">R$ 29,26</td></tr><tr><td>MERCADOLIVRE*MERCADOLIVRE (2/2)</td><td class="num">R$ 19,97</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Escola</span>
+              <div class="cat-track"><div class="cat-barra" style="width:10.3%"></div></div>
+              <span class="cat-valor">R$ 495,50</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>KIWIFY *ComunRatos (2/2)</td><td class="num">R$ 210,53</td></tr><tr><td>PG *ESTRATEGIACON (8/12)</td><td class="num">R$ 104,90</td></tr><tr><td>KIWIFY *TriboQueLe (9/12)</td><td class="num">R$ 103,11</td></tr><tr><td>KIWIFY*RatosOS (2/2)</td><td class="num">R$ 51,06</td></tr><tr><td>QCONCURSOS (8/12)</td><td class="num">R$ 25,90</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Mercado</span>
+              <div class="cat-track"><div class="cat-barra" style="width:10.2%"></div></div>
+              <span class="cat-valor">R$ 490,54</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SWIFT RECREIO (2/4)</td><td class="num">R$ 135,97</td></tr><tr><td>SEARA ALIMENTOS LTDA (2/4)</td><td class="num">R$ 116,83</td></tr><tr><td>SWIFT RECREIO (4/4)</td><td class="num">R$ 104,56</td></tr><tr><td>CARREFOUR COM (2/8)</td><td class="num">R$ 71,69</td></tr><tr><td>SHOPEE *MaxTitanium (7/9)</td><td class="num">R$ 61,49</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Casa e decoração</span>
+              <div class="cat-track"><div class="cat-barra" style="width:9.9%"></div></div>
+              <span class="cat-valor">R$ 477,02</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *LORRANIBABY (2/2)</td><td class="num">R$ 79,10</td></tr><tr><td>MLP*Magalu Loja M (9/9)</td><td class="num">R$ 74,69</td></tr><tr><td>SHOPEE *MADEIRAMADEIRA (7/12)</td><td class="num">R$ 67,92</td></tr><tr><td>SHOPEE *RCDecoraes (8/12)</td><td class="num">R$ 66,36</td></tr><tr><td>SHOPEE *ESSENCIALDETAL (9/11)</td><td class="num">R$ 64,67</td></tr><tr><td>SHOPEE *CasaDomo (8/9)</td><td class="num">R$ 63,11</td></tr><tr><td>SHOPEE *CAETANOENXOVAI (9/9)</td><td class="num">R$ 61,17</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Hospedagem</span>
+              <div class="cat-track"><div class="cat-barra" style="width:9.7%"></div></div>
+              <span class="cat-valor">R$ 465,33</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>HOTEL FAZENDA LAGOS DO (3/6)</td><td class="num">R$ 465,33</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Vestuário</span>
+              <div class="cat-track"><div class="cat-barra" style="width:6.8%"></div></div>
+              <span class="cat-valor">R$ 327,71</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *EcomBeleza (8/12)</td><td class="num">R$ 118,70</td></tr><tr><td>ALFAIATARIA SAO L (6/6)</td><td class="num">R$ 70,00</td></tr><tr><td>SHOPEE *VYJeans (4/6)</td><td class="num">R$ 55,65</td></tr><tr><td>SHOPEE *AzzevicheTrico (4/6)</td><td class="num">R$ 51,07</td></tr><tr><td>AMAZONMKTPLC*GABRIELAR (5/5)</td><td class="num">R$ 32,29</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Saúde</span>
+              <div class="cat-track"><div class="cat-barra" style="width:6.6%"></div></div>
+              <span class="cat-valor">R$ 318,16</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>JIM.COM GABRIEL FERREIRA (4/6)</td><td class="num">R$ 318,16</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Material de escritório</span>
+              <div class="cat-track"><div class="cat-barra" style="width:6.4%"></div></div>
+              <span class="cat-valor">R$ 310,22</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *LOJAEASYHOUSE (9/12)</td><td class="num">R$ 199,94</td></tr><tr><td>SHOPEE *LOJAEASYHOUSE (9/12)</td><td class="num">R$ 71,45</td></tr><tr><td>AMAZONMKTPLC*BIANCASTE (6/6)</td><td class="num">R$ 38,83</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Artigos esportivos</span>
+              <div class="cat-track"><div class="cat-barra" style="width:6.4%"></div></div>
+              <span class="cat-valor">R$ 305,95</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>EC *KEEPRUNNING (5/5)</td><td class="num">R$ 170,98</td></tr><tr><td>MLP*Netshoes NS2C (4/8)</td><td class="num">R$ 74,99</td></tr><tr><td>MP*VELOCITA (7/10)</td><td class="num">R$ 59,98</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Educação</span>
+              <div class="cat-track"><div class="cat-barra" style="width:4.3%"></div></div>
+              <span class="cat-valor">R$ 208,95</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>HTM*Fellipe Sales-C (2/2)</td><td class="num">R$ 208,95</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Óptica</span>
+              <div class="cat-track"><div class="cat-barra" style="width:2.6%"></div></div>
+              <span class="cat-valor">R$ 124,02</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>OticasRIz (8/10)</td><td class="num">R$ 70,00</td></tr><tr><td>ESGH I L00570 I EOTICA (7/10)</td><td class="num">R$ 54,02</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Bicicleta</span>
+              <div class="cat-track"><div class="cat-barra" style="width:1.7%"></div></div>
+              <span class="cat-valor">R$ 80,43</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>CP *AMIGAO 21 SH SULAC (9/10)</td><td class="num">R$ 46,86</td></tr><tr><td>CP *AMIGAO 21 SH SULAC (8/10)</td><td class="num">R$ 33,57</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Brinquedos e infantil</span>
+              <div class="cat-track"><div class="cat-barra" style="width:1.3%"></div></div>
+              <span class="cat-valor">R$ 64,89</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *CompanyFT (7/7)</td><td class="num">R$ 64,89</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Compras online</span>
+              <div class="cat-track"><div class="cat-barra" style="width:1.3%"></div></div>
+              <span class="cat-valor">R$ 63,60</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *EasyTech (8/9)</td><td class="num">R$ 63,60</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Farmácia</span>
+              <div class="cat-track"><div class="cat-barra" style="width:0.9%"></div></div>
+              <span class="cat-valor">R$ 42,33</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>CORPUS SANO (3/3)</td><td class="num">R$ 42,33</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Serviços digitais</span>
+              <div class="cat-track"><div class="cat-barra" style="width:0.5%"></div></div>
+              <span class="cat-valor">R$ 24,24</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>EBN    *Canva04928 44 (2/12)</td><td class="num">R$ 24,24</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Manutenção do veículo</span>
+              <div class="cat-track"><div class="cat-barra" style="width:0.4%"></div></div>
+              <span class="cat-valor">R$ 21,00</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>MERCADO PAGO*RENO (2/3)</td><td class="num">R$ 21,00</td></tr></tbody></table>
+        </details></div>
+      </details>
+      
+  <details class="detalhe-fatura">
+    <summary>
+      <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+        <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Entrada prevista</span>
+        <span class="cat-valor" style="font-size:14px;">R$ 12.898,78</span>
+      </div>
+    </summary>
+    <table class="tabela-detalhe">
+      <tbody>
+        <tr><td>Salário médio (últimos meses fechados)</td><td class="num">R$ 10.563,53</td></tr>
+        <tr><td>Renda extra média (assessoria)</td><td class="num">R$ 2.335,26</td></tr>
+        <tr><td><strong>Total</strong></td><td class="num"><strong>R$ 12.898,78</strong></td></tr>
+      </tbody>
+    </table>
+  </details>
+    </div>
+  </details>
+  <details class="card mes-panorama">
+    <summary>
+      <span class="mes-panorama-titulo">Set/26</span>
+      <span class="badge critical">Não cobre</span>
+    </summary>
+    <div class="tiles" style="margin-top:14px;">
+      <div class="tile"><div class="label">Total necessário</div><div class="valor">R$ 21.012,75</div></div>
+      <div class="tile"><div class="label">Caixa no início do mês</div><div class="valor">R$ 1.424,51</div></div>
+      <div class="tile"><div class="label">Saldo projetado no fim do mês</div><div class="valor critical">R$ -6.689,46</div></div>
+    </div>
+    <div style="margin-top:14px;">
+      
+  <details class="detalhe-fatura">
+    <summary>
+      <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+        <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Fixos no Pix</span>
+        <span class="cat-valor" style="font-size:14px;">R$ 6.180,70</span>
+      </div>
+    </summary>
+    <table class="tabela-detalhe">
+      <tbody><tr><td>Psicóloga</td><td class="num">R$ 720,00</td></tr><tr><td>Financiamento carro</td><td class="num">R$ 2.760,56</td></tr><tr><td>Internet</td><td class="num">R$ 99,90</td></tr><tr><td>Condomínio</td><td class="num">R$ 1.162,63</td></tr><tr><td>Luz (faixa R$ 600,00–R$ 900,00)</td><td class="num">R$ 900,00</td></tr><tr><td>PNR</td><td class="num">R$ 334,11</td></tr><tr><td>IR</td><td class="num">R$ 203,50</td></tr>
+        <tr><td><strong>Total</strong></td><td class="num"><strong>R$ 6.180,70</strong></td></tr>
+      </tbody>
+    </table>
+  </details>
+      
+  <details class="detalhe-fatura">
+    <summary>
+      <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+        <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Fixos no cartão recorrente</span>
+        <span class="cat-valor" style="font-size:14px;">R$ 5.288,83</span>
+      </div>
+    </summary>
+    <table class="tabela-detalhe">
+      <tbody><tr><td>Vivo</td><td class="num">R$ 93,00</td></tr><tr><td>Faculdade</td><td class="num">R$ 829,19</td></tr><tr><td>Escolinha do Guel</td><td class="num">R$ 1.917,14</td></tr><tr><td>Tim</td><td class="num">R$ 56,80</td></tr><tr><td>Combustível (faixa R$ 400,00–R$ 500,00)</td><td class="num">R$ 500,00</td></tr><tr><td>Mercado (faixa R$ 1.600,00–R$ 1.800,00)</td><td class="num">R$ 1.800,00</td></tr><tr><td>YouTube Premium</td><td class="num">R$ 33,80</td></tr><tr><td>Spotify</td><td class="num">R$ 12,90</td></tr><tr><td>Smiles</td><td class="num">R$ 46,00</td></tr>
+        <tr><td><strong>Total</strong></td><td class="num"><strong>R$ 5.288,83</strong></td></tr>
+      </tbody>
+    </table>
+  </details>
+      <details class="detalhe-fatura">
+        <summary>
+          <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+            <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Fatura do cartão</span>
+            <span class="cat-valor" style="font-size:14px;">R$ 14.832,05</span>
+          </div>
+        </summary>
+        <div style="margin-top:10px;">
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Eletrônicos</span>
+              <div class="cat-track"><div class="cat-barra" style="width:100.0%"></div></div>
+              <span class="cat-valor">R$ 4.564,56</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *WEWELIFE (10/12)</td><td class="num">R$ 302,65</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (3/18)</td><td class="num">R$ 250,02</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (11/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (7/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (13/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (5/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (16/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (12/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (17/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (18/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (9/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (14/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (6/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (4/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (8/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (15/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (10/18)</td><td class="num">R$ 249,94</td></tr><tr><td>EC*SAMSUNG (10/18)</td><td class="num">R$ 211,05</td></tr><tr><td>SHOPEE *amsodloja (5/7)</td><td class="num">R$ 51,74</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Livraria</span>
+              <div class="cat-track"><div class="cat-barra" style="width:23.4%"></div></div>
+              <span class="cat-valor">R$ 1.066,22</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>AMAZON BR (7/10)</td><td class="num">R$ 152,99</td></tr><tr><td>S2P*1BIBLIOTECACA (9/12)</td><td class="num">R$ 151,90</td></tr><tr><td>AMAZON MARKETPLACE  CC (5/6)</td><td class="num">R$ 126,56</td></tr><tr><td>AMAZON MARKETPLACE  CC (10/12)</td><td class="num">R$ 119,87</td></tr><tr><td>S2P*1BIBLIOTECACA (9/12)</td><td class="num">R$ 79,90</td></tr><tr><td>AMAZON MARKETPLACE  CC (8/10)</td><td class="num">R$ 59,72</td></tr><tr><td>AMAZON MARKETPLACE  CC (6/6)</td><td class="num">R$ 56,76</td></tr><tr><td>AMAZON BR (5/10)</td><td class="num">R$ 52,30</td></tr><tr><td>AMAZON MARKETPLACE  CC (9/9)</td><td class="num">R$ 51,82</td></tr><tr><td>AMAZON BR (7/7)</td><td class="num">R$ 51,56</td></tr><tr><td>AMAZON BR (6/6)</td><td class="num">R$ 50,28</td></tr><tr><td>AMAZON BR (6/6)</td><td class="num">R$ 49,96</td></tr><tr><td>AMAZON BR   *Amazon BR (3/4)</td><td class="num">R$ 34,81</td></tr><tr><td>PARC=110LEITURA (9/10)</td><td class="num">R$ 27,79</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Serviços</span>
+              <div class="cat-track"><div class="cat-barra" style="width:18.7%"></div></div>
+              <span class="cat-valor">R$ 853,55</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>HTM*PADRAOAB (6/6)</td><td class="num">R$ 143,89</td></tr><tr><td>HTM*PADRAOAB (5/6)</td><td class="num">R$ 143,89</td></tr><tr><td>HTM*PADRAOAB (4/6)</td><td class="num">R$ 143,89</td></tr><tr><td>HTM*PADRAOAB (3/6)</td><td class="num">R$ 143,89</td></tr><tr><td>PG *CONTAJA CONTA (5/12)</td><td class="num">R$ 137,40</td></tr><tr><td>IG*CompanyHero (4/12)</td><td class="num">R$ 55,51</td></tr><tr><td>CEDET  *livro-2106241 (4/6)</td><td class="num">R$ 47,49</td></tr><tr><td>PG *LESEN LIVRARI (6/10)</td><td class="num">R$ 37,59</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Hospedagem</span>
+              <div class="cat-track"><div class="cat-barra" style="width:10.2%"></div></div>
+              <span class="cat-valor">R$ 465,33</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>HOTEL FAZENDA LAGOS DO (4/6)</td><td class="num">R$ 465,33</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Compras</span>
+              <div class="cat-track"><div class="cat-barra" style="width:9.8%"></div></div>
+              <span class="cat-valor">R$ 448,38</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *JR905 (8/12)</td><td class="num">R$ 98,83</td></tr><tr><td>SHOPEE *CriptoBikes (7/12)</td><td class="num">R$ 88,56</td></tr><tr><td>PG *SANTHATELA SA (6/6)</td><td class="num">R$ 85,88</td></tr><tr><td>AMAZONMKTPLC*RCPRODUTO (8/10)</td><td class="num">R$ 68,47</td></tr><tr><td>MP *GROWTHSUPPLEMENTS (5/6)</td><td class="num">R$ 41,30</td></tr><tr><td>AMAZONMKTPLC*Amazon BR (3/4)</td><td class="num">R$ 33,82</td></tr><tr><td>MERCADOLIVRE*NIAD (3/5)</td><td class="num">R$ 31,52</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Mercado</span>
+              <div class="cat-track"><div class="cat-barra" style="width:8.5%"></div></div>
+              <span class="cat-valor">R$ 385,98</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SWIFT RECREIO (3/4)</td><td class="num">R$ 135,97</td></tr><tr><td>SEARA ALIMENTOS LTDA (3/4)</td><td class="num">R$ 116,83</td></tr><tr><td>CARREFOUR COM (3/8)</td><td class="num">R$ 71,69</td></tr><tr><td>SHOPEE *MaxTitanium (8/9)</td><td class="num">R$ 61,49</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Saúde</span>
+              <div class="cat-track"><div class="cat-barra" style="width:7.0%"></div></div>
+              <span class="cat-valor">R$ 318,16</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>JIM.COM GABRIEL FERREIRA (5/6)</td><td class="num">R$ 318,16</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Material de escritório</span>
+              <div class="cat-track"><div class="cat-barra" style="width:5.9%"></div></div>
+              <span class="cat-valor">R$ 271,39</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *LOJAEASYHOUSE (10/12)</td><td class="num">R$ 199,94</td></tr><tr><td>SHOPEE *LOJAEASYHOUSE (10/12)</td><td class="num">R$ 71,45</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Casa e decoração</span>
+              <div class="cat-track"><div class="cat-barra" style="width:5.7%"></div></div>
+              <span class="cat-valor">R$ 262,06</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *MADEIRAMADEIRA (8/12)</td><td class="num">R$ 67,92</td></tr><tr><td>SHOPEE *RCDecoraes (9/12)</td><td class="num">R$ 66,36</td></tr><tr><td>SHOPEE *ESSENCIALDETAL (10/11)</td><td class="num">R$ 64,67</td></tr><tr><td>SHOPEE *CasaDomo (9/9)</td><td class="num">R$ 63,11</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Escola</span>
+              <div class="cat-track"><div class="cat-barra" style="width:5.1%"></div></div>
+              <span class="cat-valor">R$ 233,91</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>PG *ESTRATEGIACON (9/12)</td><td class="num">R$ 104,90</td></tr><tr><td>KIWIFY *TriboQueLe (10/12)</td><td class="num">R$ 103,11</td></tr><tr><td>QCONCURSOS (9/12)</td><td class="num">R$ 25,90</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Vestuário</span>
+              <div class="cat-track"><div class="cat-barra" style="width:4.9%"></div></div>
+              <span class="cat-valor">R$ 225,42</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *EcomBeleza (9/12)</td><td class="num">R$ 118,70</td></tr><tr><td>SHOPEE *VYJeans (5/6)</td><td class="num">R$ 55,65</td></tr><tr><td>SHOPEE *AzzevicheTrico (5/6)</td><td class="num">R$ 51,07</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Artigos esportivos</span>
+              <div class="cat-track"><div class="cat-barra" style="width:3.0%"></div></div>
+              <span class="cat-valor">R$ 134,97</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>MLP*Netshoes NS2C (5/8)</td><td class="num">R$ 74,99</td></tr><tr><td>MP*VELOCITA (8/10)</td><td class="num">R$ 59,98</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Óptica</span>
+              <div class="cat-track"><div class="cat-barra" style="width:2.7%"></div></div>
+              <span class="cat-valor">R$ 124,02</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>OticasRIz (9/10)</td><td class="num">R$ 70,00</td></tr><tr><td>ESGH I L00570 I EOTICA (8/10)</td><td class="num">R$ 54,02</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Bicicleta</span>
+              <div class="cat-track"><div class="cat-barra" style="width:1.8%"></div></div>
+              <span class="cat-valor">R$ 80,43</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>CP *AMIGAO 21 SH SULAC (10/10)</td><td class="num">R$ 46,86</td></tr><tr><td>CP *AMIGAO 21 SH SULAC (9/10)</td><td class="num">R$ 33,57</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Compras online</span>
+              <div class="cat-track"><div class="cat-barra" style="width:1.4%"></div></div>
+              <span class="cat-valor">R$ 63,60</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *EasyTech (9/9)</td><td class="num">R$ 63,60</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Serviços digitais</span>
+              <div class="cat-track"><div class="cat-barra" style="width:0.5%"></div></div>
+              <span class="cat-valor">R$ 24,24</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>EBN    *Canva04928 44 (3/12)</td><td class="num">R$ 24,24</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Manutenção do veículo</span>
+              <div class="cat-track"><div class="cat-barra" style="width:0.5%"></div></div>
+              <span class="cat-valor">R$ 21,00</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>MERCADO PAGO*RENO (3/3)</td><td class="num">R$ 21,00</td></tr></tbody></table>
+        </details></div>
+      </details>
+      
+  <details class="detalhe-fatura">
+    <summary>
+      <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+        <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Entrada prevista</span>
+        <span class="cat-valor" style="font-size:14px;">R$ 12.898,78</span>
+      </div>
+    </summary>
+    <table class="tabela-detalhe">
+      <tbody>
+        <tr><td>Salário médio (últimos meses fechados)</td><td class="num">R$ 10.563,53</td></tr>
+        <tr><td>Renda extra média (assessoria)</td><td class="num">R$ 2.335,26</td></tr>
+        <tr><td><strong>Total</strong></td><td class="num"><strong>R$ 12.898,78</strong></td></tr>
+      </tbody>
+    </table>
+  </details>
+    </div>
+  </details>
+  <details class="card mes-panorama">
+    <summary>
+      <span class="mes-panorama-titulo">Out/26</span>
+      <span class="badge critical">Não cobre</span>
+    </summary>
+    <div class="tiles" style="margin-top:14px;">
+      <div class="tile"><div class="label">Total necessário</div><div class="valor">R$ 20.078,09</div></div>
+      <div class="tile"><div class="label">Caixa no início do mês</div><div class="valor">R$ -6.689,46</div></div>
+      <div class="tile"><div class="label">Saldo projetado no fim do mês</div><div class="valor critical">R$ -13.868,77</div></div>
+    </div>
+    <div style="margin-top:14px;">
+      
+  <details class="detalhe-fatura">
+    <summary>
+      <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+        <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Fixos no Pix</span>
+        <span class="cat-valor" style="font-size:14px;">R$ 6.180,70</span>
+      </div>
+    </summary>
+    <table class="tabela-detalhe">
+      <tbody><tr><td>Psicóloga</td><td class="num">R$ 720,00</td></tr><tr><td>Financiamento carro</td><td class="num">R$ 2.760,56</td></tr><tr><td>Internet</td><td class="num">R$ 99,90</td></tr><tr><td>Condomínio</td><td class="num">R$ 1.162,63</td></tr><tr><td>Luz (faixa R$ 600,00–R$ 900,00)</td><td class="num">R$ 900,00</td></tr><tr><td>PNR</td><td class="num">R$ 334,11</td></tr><tr><td>IR</td><td class="num">R$ 203,50</td></tr>
+        <tr><td><strong>Total</strong></td><td class="num"><strong>R$ 6.180,70</strong></td></tr>
+      </tbody>
+    </table>
+  </details>
+      
+  <details class="detalhe-fatura">
+    <summary>
+      <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+        <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Fixos no cartão recorrente</span>
+        <span class="cat-valor" style="font-size:14px;">R$ 5.288,83</span>
+      </div>
+    </summary>
+    <table class="tabela-detalhe">
+      <tbody><tr><td>Vivo</td><td class="num">R$ 93,00</td></tr><tr><td>Faculdade</td><td class="num">R$ 829,19</td></tr><tr><td>Escolinha do Guel</td><td class="num">R$ 1.917,14</td></tr><tr><td>Tim</td><td class="num">R$ 56,80</td></tr><tr><td>Combustível (faixa R$ 400,00–R$ 500,00)</td><td class="num">R$ 500,00</td></tr><tr><td>Mercado (faixa R$ 1.600,00–R$ 1.800,00)</td><td class="num">R$ 1.800,00</td></tr><tr><td>YouTube Premium</td><td class="num">R$ 33,80</td></tr><tr><td>Spotify</td><td class="num">R$ 12,90</td></tr><tr><td>Smiles</td><td class="num">R$ 46,00</td></tr>
+        <tr><td><strong>Total</strong></td><td class="num"><strong>R$ 5.288,83</strong></td></tr>
+      </tbody>
+    </table>
+  </details>
+      <details class="detalhe-fatura">
+        <summary>
+          <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+            <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Fatura do cartão</span>
+            <span class="cat-valor" style="font-size:14px;">R$ 13.897,39</span>
+          </div>
+        </summary>
+        <div style="margin-top:10px;">
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Eletrônicos</span>
+              <div class="cat-track"><div class="cat-barra" style="width:100.0%"></div></div>
+              <span class="cat-valor">R$ 4.314,62</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *WEWELIFE (11/12)</td><td class="num">R$ 302,65</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (4/18)</td><td class="num">R$ 250,02</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (12/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (8/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (14/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (6/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (17/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (13/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (18/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (10/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (15/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (7/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (5/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (9/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (16/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (11/18)</td><td class="num">R$ 249,94</td></tr><tr><td>EC*SAMSUNG (11/18)</td><td class="num">R$ 211,05</td></tr><tr><td>SHOPEE *amsodloja (6/7)</td><td class="num">R$ 51,74</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Livraria</span>
+              <div class="cat-track"><div class="cat-barra" style="width:18.7%"></div></div>
+              <span class="cat-valor">R$ 805,84</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>AMAZON BR (8/10)</td><td class="num">R$ 152,99</td></tr><tr><td>S2P*1BIBLIOTECACA (10/12)</td><td class="num">R$ 151,90</td></tr><tr><td>AMAZON MARKETPLACE  CC (6/6)</td><td class="num">R$ 126,56</td></tr><tr><td>AMAZON MARKETPLACE  CC (11/12)</td><td class="num">R$ 119,87</td></tr><tr><td>S2P*1BIBLIOTECACA (10/12)</td><td class="num">R$ 79,90</td></tr><tr><td>AMAZON MARKETPLACE  CC (9/10)</td><td class="num">R$ 59,72</td></tr><tr><td>AMAZON BR (6/10)</td><td class="num">R$ 52,30</td></tr><tr><td>AMAZON BR   *Amazon BR (4/4)</td><td class="num">R$ 34,81</td></tr><tr><td>PARC=110LEITURA (10/10)</td><td class="num">R$ 27,79</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Serviços</span>
+              <div class="cat-track"><div class="cat-barra" style="width:16.4%"></div></div>
+              <span class="cat-valor">R$ 709,66</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>HTM*PADRAOAB (6/6)</td><td class="num">R$ 143,89</td></tr><tr><td>HTM*PADRAOAB (5/6)</td><td class="num">R$ 143,89</td></tr><tr><td>HTM*PADRAOAB (4/6)</td><td class="num">R$ 143,89</td></tr><tr><td>PG *CONTAJA CONTA (6/12)</td><td class="num">R$ 137,40</td></tr><tr><td>IG*CompanyHero (5/12)</td><td class="num">R$ 55,51</td></tr><tr><td>CEDET  *livro-2106241 (5/6)</td><td class="num">R$ 47,49</td></tr><tr><td>PG *LESEN LIVRARI (7/10)</td><td class="num">R$ 37,59</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Hospedagem</span>
+              <div class="cat-track"><div class="cat-barra" style="width:10.8%"></div></div>
+              <span class="cat-valor">R$ 465,33</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>HOTEL FAZENDA LAGOS DO (5/6)</td><td class="num">R$ 465,33</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Mercado</span>
+              <div class="cat-track"><div class="cat-barra" style="width:8.9%"></div></div>
+              <span class="cat-valor">R$ 385,98</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SWIFT RECREIO (4/4)</td><td class="num">R$ 135,97</td></tr><tr><td>SEARA ALIMENTOS LTDA (4/4)</td><td class="num">R$ 116,83</td></tr><tr><td>CARREFOUR COM (4/8)</td><td class="num">R$ 71,69</td></tr><tr><td>SHOPEE *MaxTitanium (9/9)</td><td class="num">R$ 61,49</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Compras</span>
+              <div class="cat-track"><div class="cat-barra" style="width:8.4%"></div></div>
+              <span class="cat-valor">R$ 362,50</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *JR905 (9/12)</td><td class="num">R$ 98,83</td></tr><tr><td>SHOPEE *CriptoBikes (8/12)</td><td class="num">R$ 88,56</td></tr><tr><td>AMAZONMKTPLC*RCPRODUTO (9/10)</td><td class="num">R$ 68,47</td></tr><tr><td>MP *GROWTHSUPPLEMENTS (6/6)</td><td class="num">R$ 41,30</td></tr><tr><td>AMAZONMKTPLC*Amazon BR (4/4)</td><td class="num">R$ 33,82</td></tr><tr><td>MERCADOLIVRE*NIAD (4/5)</td><td class="num">R$ 31,52</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Saúde</span>
+              <div class="cat-track"><div class="cat-barra" style="width:7.4%"></div></div>
+              <span class="cat-valor">R$ 318,16</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>JIM.COM GABRIEL FERREIRA (6/6)</td><td class="num">R$ 318,16</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Material de escritório</span>
+              <div class="cat-track"><div class="cat-barra" style="width:6.3%"></div></div>
+              <span class="cat-valor">R$ 271,39</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *LOJAEASYHOUSE (11/12)</td><td class="num">R$ 199,94</td></tr><tr><td>SHOPEE *LOJAEASYHOUSE (11/12)</td><td class="num">R$ 71,45</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Escola</span>
+              <div class="cat-track"><div class="cat-barra" style="width:5.4%"></div></div>
+              <span class="cat-valor">R$ 233,91</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>PG *ESTRATEGIACON (10/12)</td><td class="num">R$ 104,90</td></tr><tr><td>KIWIFY *TriboQueLe (11/12)</td><td class="num">R$ 103,11</td></tr><tr><td>QCONCURSOS (10/12)</td><td class="num">R$ 25,90</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Vestuário</span>
+              <div class="cat-track"><div class="cat-barra" style="width:5.2%"></div></div>
+              <span class="cat-valor">R$ 225,42</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *EcomBeleza (10/12)</td><td class="num">R$ 118,70</td></tr><tr><td>SHOPEE *VYJeans (6/6)</td><td class="num">R$ 55,65</td></tr><tr><td>SHOPEE *AzzevicheTrico (6/6)</td><td class="num">R$ 51,07</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Casa e decoração</span>
+              <div class="cat-track"><div class="cat-barra" style="width:4.6%"></div></div>
+              <span class="cat-valor">R$ 198,95</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *MADEIRAMADEIRA (9/12)</td><td class="num">R$ 67,92</td></tr><tr><td>SHOPEE *RCDecoraes (10/12)</td><td class="num">R$ 66,36</td></tr><tr><td>SHOPEE *ESSENCIALDETAL (11/11)</td><td class="num">R$ 64,67</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Artigos esportivos</span>
+              <div class="cat-track"><div class="cat-barra" style="width:3.1%"></div></div>
+              <span class="cat-valor">R$ 134,97</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>MLP*Netshoes NS2C (6/8)</td><td class="num">R$ 74,99</td></tr><tr><td>MP*VELOCITA (9/10)</td><td class="num">R$ 59,98</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Óptica</span>
+              <div class="cat-track"><div class="cat-barra" style="width:2.9%"></div></div>
+              <span class="cat-valor">R$ 124,02</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>OticasRIz (10/10)</td><td class="num">R$ 70,00</td></tr><tr><td>ESGH I L00570 I EOTICA (9/10)</td><td class="num">R$ 54,02</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Bicicleta</span>
+              <div class="cat-track"><div class="cat-barra" style="width:0.8%"></div></div>
+              <span class="cat-valor">R$ 33,57</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>CP *AMIGAO 21 SH SULAC (10/10)</td><td class="num">R$ 33,57</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Serviços digitais</span>
+              <div class="cat-track"><div class="cat-barra" style="width:0.6%"></div></div>
+              <span class="cat-valor">R$ 24,24</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>EBN    *Canva04928 44 (4/12)</td><td class="num">R$ 24,24</td></tr></tbody></table>
+        </details></div>
+      </details>
+      
+  <details class="detalhe-fatura">
+    <summary>
+      <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+        <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Entrada prevista</span>
+        <span class="cat-valor" style="font-size:14px;">R$ 12.898,78</span>
+      </div>
+    </summary>
+    <table class="tabela-detalhe">
+      <tbody>
+        <tr><td>Salário médio (últimos meses fechados)</td><td class="num">R$ 10.563,53</td></tr>
+        <tr><td>Renda extra média (assessoria)</td><td class="num">R$ 2.335,26</td></tr>
+        <tr><td><strong>Total</strong></td><td class="num"><strong>R$ 12.898,78</strong></td></tr>
+      </tbody>
+    </table>
+  </details>
+    </div>
+  </details>
+  <details class="card mes-panorama">
+    <summary>
+      <span class="mes-panorama-titulo">Nov/26</span>
+      <span class="badge critical">Não cobre</span>
+    </summary>
+    <div class="tiles" style="margin-top:14px;">
+      <div class="tile"><div class="label">Total necessário</div><div class="valor">R$ 18.512,57</div></div>
+      <div class="tile"><div class="label">Caixa no início do mês</div><div class="valor">R$ -13.868,77</div></div>
+      <div class="tile"><div class="label">Saldo projetado no fim do mês</div><div class="valor critical">R$ -19.482,55</div></div>
+    </div>
+    <div style="margin-top:14px;">
+      
+  <details class="detalhe-fatura">
+    <summary>
+      <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+        <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Fixos no Pix</span>
+        <span class="cat-valor" style="font-size:14px;">R$ 6.180,70</span>
+      </div>
+    </summary>
+    <table class="tabela-detalhe">
+      <tbody><tr><td>Psicóloga</td><td class="num">R$ 720,00</td></tr><tr><td>Financiamento carro</td><td class="num">R$ 2.760,56</td></tr><tr><td>Internet</td><td class="num">R$ 99,90</td></tr><tr><td>Condomínio</td><td class="num">R$ 1.162,63</td></tr><tr><td>Luz (faixa R$ 600,00–R$ 900,00)</td><td class="num">R$ 900,00</td></tr><tr><td>PNR</td><td class="num">R$ 334,11</td></tr><tr><td>IR</td><td class="num">R$ 203,50</td></tr>
+        <tr><td><strong>Total</strong></td><td class="num"><strong>R$ 6.180,70</strong></td></tr>
+      </tbody>
+    </table>
+  </details>
+      
+  <details class="detalhe-fatura">
+    <summary>
+      <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+        <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Fixos no cartão recorrente</span>
+        <span class="cat-valor" style="font-size:14px;">R$ 5.288,83</span>
+      </div>
+    </summary>
+    <table class="tabela-detalhe">
+      <tbody><tr><td>Vivo</td><td class="num">R$ 93,00</td></tr><tr><td>Faculdade</td><td class="num">R$ 829,19</td></tr><tr><td>Escolinha do Guel</td><td class="num">R$ 1.917,14</td></tr><tr><td>Tim</td><td class="num">R$ 56,80</td></tr><tr><td>Combustível (faixa R$ 400,00–R$ 500,00)</td><td class="num">R$ 500,00</td></tr><tr><td>Mercado (faixa R$ 1.600,00–R$ 1.800,00)</td><td class="num">R$ 1.800,00</td></tr><tr><td>YouTube Premium</td><td class="num">R$ 33,80</td></tr><tr><td>Spotify</td><td class="num">R$ 12,90</td></tr><tr><td>Smiles</td><td class="num">R$ 46,00</td></tr>
+        <tr><td><strong>Total</strong></td><td class="num"><strong>R$ 5.288,83</strong></td></tr>
+      </tbody>
+    </table>
+  </details>
+      <details class="detalhe-fatura">
+        <summary>
+          <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+            <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Fatura do cartão</span>
+            <span class="cat-valor" style="font-size:14px;">R$ 12.331,87</span>
+          </div>
+        </summary>
+        <div style="margin-top:10px;">
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Eletrônicos</span>
+              <div class="cat-track"><div class="cat-barra" style="width:100.0%"></div></div>
+              <span class="cat-valor">R$ 4.064,68</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *WEWELIFE (12/12)</td><td class="num">R$ 302,65</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (5/18)</td><td class="num">R$ 250,02</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (13/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (9/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (15/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (7/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (18/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (14/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (11/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (16/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (8/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (6/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (10/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (17/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (12/18)</td><td class="num">R$ 249,94</td></tr><tr><td>EC*SAMSUNG (12/18)</td><td class="num">R$ 211,05</td></tr><tr><td>SHOPEE *amsodloja (7/7)</td><td class="num">R$ 51,74</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Livraria</span>
+              <div class="cat-track"><div class="cat-barra" style="width:15.2%"></div></div>
+              <span class="cat-valor">R$ 616,68</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>AMAZON BR (9/10)</td><td class="num">R$ 152,99</td></tr><tr><td>S2P*1BIBLIOTECACA (11/12)</td><td class="num">R$ 151,90</td></tr><tr><td>AMAZON MARKETPLACE  CC (12/12)</td><td class="num">R$ 119,87</td></tr><tr><td>S2P*1BIBLIOTECACA (11/12)</td><td class="num">R$ 79,90</td></tr><tr><td>AMAZON MARKETPLACE  CC (10/10)</td><td class="num">R$ 59,72</td></tr><tr><td>AMAZON BR (7/10)</td><td class="num">R$ 52,30</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Serviços</span>
+              <div class="cat-track"><div class="cat-barra" style="width:13.9%"></div></div>
+              <span class="cat-valor">R$ 565,77</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>HTM*PADRAOAB (6/6)</td><td class="num">R$ 143,89</td></tr><tr><td>HTM*PADRAOAB (5/6)</td><td class="num">R$ 143,89</td></tr><tr><td>PG *CONTAJA CONTA (7/12)</td><td class="num">R$ 137,40</td></tr><tr><td>IG*CompanyHero (6/12)</td><td class="num">R$ 55,51</td></tr><tr><td>CEDET  *livro-2106241 (6/6)</td><td class="num">R$ 47,49</td></tr><tr><td>PG *LESEN LIVRARI (8/10)</td><td class="num">R$ 37,59</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Hospedagem</span>
+              <div class="cat-track"><div class="cat-barra" style="width:11.4%"></div></div>
+              <span class="cat-valor">R$ 465,33</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>HOTEL FAZENDA LAGOS DO (6/6)</td><td class="num">R$ 465,33</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Compras</span>
+              <div class="cat-track"><div class="cat-barra" style="width:7.1%"></div></div>
+              <span class="cat-valor">R$ 287,38</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *JR905 (10/12)</td><td class="num">R$ 98,83</td></tr><tr><td>SHOPEE *CriptoBikes (9/12)</td><td class="num">R$ 88,56</td></tr><tr><td>AMAZONMKTPLC*RCPRODUTO (10/10)</td><td class="num">R$ 68,47</td></tr><tr><td>MERCADOLIVRE*NIAD (5/5)</td><td class="num">R$ 31,52</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Material de escritório</span>
+              <div class="cat-track"><div class="cat-barra" style="width:6.7%"></div></div>
+              <span class="cat-valor">R$ 271,39</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *LOJAEASYHOUSE (12/12)</td><td class="num">R$ 199,94</td></tr><tr><td>SHOPEE *LOJAEASYHOUSE (12/12)</td><td class="num">R$ 71,45</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Escola</span>
+              <div class="cat-track"><div class="cat-barra" style="width:5.8%"></div></div>
+              <span class="cat-valor">R$ 233,91</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>PG *ESTRATEGIACON (11/12)</td><td class="num">R$ 104,90</td></tr><tr><td>KIWIFY *TriboQueLe (12/12)</td><td class="num">R$ 103,11</td></tr><tr><td>QCONCURSOS (11/12)</td><td class="num">R$ 25,90</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Artigos esportivos</span>
+              <div class="cat-track"><div class="cat-barra" style="width:3.3%"></div></div>
+              <span class="cat-valor">R$ 134,97</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>MLP*Netshoes NS2C (7/8)</td><td class="num">R$ 74,99</td></tr><tr><td>MP*VELOCITA (10/10)</td><td class="num">R$ 59,98</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Casa e decoração</span>
+              <div class="cat-track"><div class="cat-barra" style="width:3.3%"></div></div>
+              <span class="cat-valor">R$ 134,28</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *MADEIRAMADEIRA (10/12)</td><td class="num">R$ 67,92</td></tr><tr><td>SHOPEE *RCDecoraes (11/12)</td><td class="num">R$ 66,36</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Vestuário</span>
+              <div class="cat-track"><div class="cat-barra" style="width:2.9%"></div></div>
+              <span class="cat-valor">R$ 118,70</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *EcomBeleza (11/12)</td><td class="num">R$ 118,70</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Mercado</span>
+              <div class="cat-track"><div class="cat-barra" style="width:1.8%"></div></div>
+              <span class="cat-valor">R$ 71,69</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>CARREFOUR COM (5/8)</td><td class="num">R$ 71,69</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Óptica</span>
+              <div class="cat-track"><div class="cat-barra" style="width:1.3%"></div></div>
+              <span class="cat-valor">R$ 54,02</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>ESGH I L00570 I EOTICA (10/10)</td><td class="num">R$ 54,02</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Serviços digitais</span>
+              <div class="cat-track"><div class="cat-barra" style="width:0.6%"></div></div>
+              <span class="cat-valor">R$ 24,24</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>EBN    *Canva04928 44 (5/12)</td><td class="num">R$ 24,24</td></tr></tbody></table>
+        </details></div>
+      </details>
+      
+  <details class="detalhe-fatura">
+    <summary>
+      <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+        <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Entrada prevista</span>
+        <span class="cat-valor" style="font-size:14px;">R$ 12.898,78</span>
+      </div>
+    </summary>
+    <table class="tabela-detalhe">
+      <tbody>
+        <tr><td>Salário médio (últimos meses fechados)</td><td class="num">R$ 10.563,53</td></tr>
+        <tr><td>Renda extra média (assessoria)</td><td class="num">R$ 2.335,26</td></tr>
+        <tr><td><strong>Total</strong></td><td class="num"><strong>R$ 12.898,78</strong></td></tr>
+      </tbody>
+    </table>
+  </details>
+    </div>
+  </details>
+  <details class="card mes-panorama">
+    <summary>
+      <span class="mes-panorama-titulo">Dez/26</span>
+      <span class="badge critical">Não cobre</span>
+    </summary>
+    <div class="tiles" style="margin-top:14px;">
+      <div class="tile"><div class="label">Total necessário</div><div class="valor">R$ 16.483,45</div></div>
+      <div class="tile"><div class="label">Caixa no início do mês</div><div class="valor">R$ -19.482,55</div></div>
+      <div class="tile"><div class="label">Saldo projetado no fim do mês</div><div class="valor critical">R$ -23.067,22</div></div>
+    </div>
+    <div style="margin-top:14px;">
+      
+  <details class="detalhe-fatura">
+    <summary>
+      <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+        <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Fixos no Pix</span>
+        <span class="cat-valor" style="font-size:14px;">R$ 6.180,70</span>
+      </div>
+    </summary>
+    <table class="tabela-detalhe">
+      <tbody><tr><td>Psicóloga</td><td class="num">R$ 720,00</td></tr><tr><td>Financiamento carro</td><td class="num">R$ 2.760,56</td></tr><tr><td>Internet</td><td class="num">R$ 99,90</td></tr><tr><td>Condomínio</td><td class="num">R$ 1.162,63</td></tr><tr><td>Luz (faixa R$ 600,00–R$ 900,00)</td><td class="num">R$ 900,00</td></tr><tr><td>PNR</td><td class="num">R$ 334,11</td></tr><tr><td>IR</td><td class="num">R$ 203,50</td></tr>
+        <tr><td><strong>Total</strong></td><td class="num"><strong>R$ 6.180,70</strong></td></tr>
+      </tbody>
+    </table>
+  </details>
+      
+  <details class="detalhe-fatura">
+    <summary>
+      <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+        <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Fixos no cartão recorrente</span>
+        <span class="cat-valor" style="font-size:14px;">R$ 5.288,83</span>
+      </div>
+    </summary>
+    <table class="tabela-detalhe">
+      <tbody><tr><td>Vivo</td><td class="num">R$ 93,00</td></tr><tr><td>Faculdade</td><td class="num">R$ 829,19</td></tr><tr><td>Escolinha do Guel</td><td class="num">R$ 1.917,14</td></tr><tr><td>Tim</td><td class="num">R$ 56,80</td></tr><tr><td>Combustível (faixa R$ 400,00–R$ 500,00)</td><td class="num">R$ 500,00</td></tr><tr><td>Mercado (faixa R$ 1.600,00–R$ 1.800,00)</td><td class="num">R$ 1.800,00</td></tr><tr><td>YouTube Premium</td><td class="num">R$ 33,80</td></tr><tr><td>Spotify</td><td class="num">R$ 12,90</td></tr><tr><td>Smiles</td><td class="num">R$ 46,00</td></tr>
+        <tr><td><strong>Total</strong></td><td class="num"><strong>R$ 5.288,83</strong></td></tr>
+      </tbody>
+    </table>
+  </details>
+      <details class="detalhe-fatura">
+        <summary>
+          <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+            <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Fatura do cartão</span>
+            <span class="cat-valor" style="font-size:14px;">R$ 10.302,75</span>
+          </div>
+        </summary>
+        <div style="margin-top:10px;">
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Eletrônicos</span>
+              <div class="cat-track"><div class="cat-barra" style="width:100.0%"></div></div>
+              <span class="cat-valor">R$ 3.460,35</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>MP*SAMSUNGELETRONICADAAMA (6/18)</td><td class="num">R$ 250,02</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (14/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (10/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (16/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (8/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (15/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (12/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (17/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (9/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (7/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (11/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (18/18)</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA (13/18)</td><td class="num">R$ 249,94</td></tr><tr><td>EC*SAMSUNG (13/18)</td><td class="num">R$ 211,05</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Livraria</span>
+              <div class="cat-track"><div class="cat-barra" style="width:12.6%"></div></div>
+              <span class="cat-valor">R$ 437,09</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>AMAZON BR (10/10)</td><td class="num">R$ 152,99</td></tr><tr><td>S2P*1BIBLIOTECACA (12/12)</td><td class="num">R$ 151,90</td></tr><tr><td>S2P*1BIBLIOTECACA (12/12)</td><td class="num">R$ 79,90</td></tr><tr><td>AMAZON BR (8/10)</td><td class="num">R$ 52,30</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Serviços</span>
+              <div class="cat-track"><div class="cat-barra" style="width:10.8%"></div></div>
+              <span class="cat-valor">R$ 374,39</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>HTM*PADRAOAB (6/6)</td><td class="num">R$ 143,89</td></tr><tr><td>PG *CONTAJA CONTA (8/12)</td><td class="num">R$ 137,40</td></tr><tr><td>IG*CompanyHero (7/12)</td><td class="num">R$ 55,51</td></tr><tr><td>PG *LESEN LIVRARI (9/10)</td><td class="num">R$ 37,59</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Compras</span>
+              <div class="cat-track"><div class="cat-barra" style="width:5.4%"></div></div>
+              <span class="cat-valor">R$ 187,39</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *JR905 (11/12)</td><td class="num">R$ 98,83</td></tr><tr><td>SHOPEE *CriptoBikes (10/12)</td><td class="num">R$ 88,56</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Casa e decoração</span>
+              <div class="cat-track"><div class="cat-barra" style="width:3.9%"></div></div>
+              <span class="cat-valor">R$ 134,28</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *MADEIRAMADEIRA (11/12)</td><td class="num">R$ 67,92</td></tr><tr><td>SHOPEE *RCDecoraes (12/12)</td><td class="num">R$ 66,36</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Escola</span>
+              <div class="cat-track"><div class="cat-barra" style="width:3.8%"></div></div>
+              <span class="cat-valor">R$ 130,80</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>PG *ESTRATEGIACON (12/12)</td><td class="num">R$ 104,90</td></tr><tr><td>QCONCURSOS (12/12)</td><td class="num">R$ 25,90</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Vestuário</span>
+              <div class="cat-track"><div class="cat-barra" style="width:3.4%"></div></div>
+              <span class="cat-valor">R$ 118,70</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *EcomBeleza (12/12)</td><td class="num">R$ 118,70</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Artigos esportivos</span>
+              <div class="cat-track"><div class="cat-barra" style="width:2.2%"></div></div>
+              <span class="cat-valor">R$ 74,99</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>MLP*Netshoes NS2C (8/8)</td><td class="num">R$ 74,99</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Mercado</span>
+              <div class="cat-track"><div class="cat-barra" style="width:2.1%"></div></div>
+              <span class="cat-valor">R$ 71,69</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>CARREFOUR COM (6/8)</td><td class="num">R$ 71,69</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Serviços digitais</span>
+              <div class="cat-track"><div class="cat-barra" style="width:0.7%"></div></div>
+              <span class="cat-valor">R$ 24,24</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>EBN    *Canva04928 44 (6/12)</td><td class="num">R$ 24,24</td></tr></tbody></table>
+        </details></div>
+      </details>
+      
+  <details class="detalhe-fatura">
+    <summary>
+      <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
+        <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Entrada prevista</span>
+        <span class="cat-valor" style="font-size:14px;">R$ 12.898,78</span>
+      </div>
+    </summary>
+    <table class="tabela-detalhe">
+      <tbody>
+        <tr><td>Salário médio (últimos meses fechados)</td><td class="num">R$ 10.563,53</td></tr>
+        <tr><td>Renda extra média (assessoria)</td><td class="num">R$ 2.335,26</td></tr>
+        <tr><td><strong>Total</strong></td><td class="num"><strong>R$ 12.898,78</strong></td></tr>
+      </tbody>
+    </table>
+  </details>
+    </div>
+  </details>
+
+  <div class="card">
+    <h2>Salário x gastos fixos — a conta fecha sem a renda extra?</h2>
+    <div class="tiles">
+      <div class="tile"><div class="label">Salário médio (últimos meses fechados)</div><div class="valor">R$ 10.563,53</div></div>
+      <div class="tile"><div class="label">Total de gastos fixos</div><div class="valor">R$ 11.469,53</div></div>
+      <div class="tile"><div class="label">Sobra fixa (só salário, antes do variável)</div><div class="valor critical">R$ -906,00</div></div>
+      <div class="tile"><div class="label">Renda extra mínima necessária</div><div class="valor">R$ 906,00</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Gasto no cartão por mês — está diminuindo?</h2>
+    <div class="legenda">
+      <span><span class="dot despesa"></span>Total comprado no cartão naquele mês (data da compra)</span>
+    </div>
+    <div class="chart-mensal">
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra despesa" style="height:30.4px"
+                 data-tip="Gasto no cartão Jul/25: R$ 4.537,82"></div>
+          </div>
+          <span class="mes-label">Jul/25</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra despesa" style="height:96.2px"
+                 data-tip="Gasto no cartão Ago/25: R$ 14.368,72"></div>
+          </div>
+          <span class="mes-label">Ago/25</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra despesa" style="height:62.8px"
+                 data-tip="Gasto no cartão Set/25: R$ 9.378,03"></div>
+          </div>
+          <span class="mes-label">Set/25</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra despesa" style="height:81.7px"
+                 data-tip="Gasto no cartão Out/25: R$ 12.195,88"></div>
+          </div>
+          <span class="mes-label">Out/25</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra despesa" style="height:104.0px"
+                 data-tip="Gasto no cartão Nov/25: R$ 15.539,03"></div>
+          </div>
+          <span class="mes-label">Nov/25</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra despesa" style="height:160.0px"
+                 data-tip="Gasto no cartão Dez/25: R$ 23.898,06"></div>
+          </div>
+          <span class="mes-label">Dez/25</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra despesa" style="height:143.3px"
+                 data-tip="Gasto no cartão Jan/26: R$ 21.399,84"></div>
+          </div>
+          <span class="mes-label">Jan/26</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra despesa" style="height:145.9px"
+                 data-tip="Gasto no cartão Fev/26: R$ 21.792,06"></div>
+          </div>
+          <span class="mes-label">Fev/26</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra despesa" style="height:158.0px"
+                 data-tip="Gasto no cartão Mar/26: R$ 23.597,75"></div>
+          </div>
+          <span class="mes-label">Mar/26</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra despesa" style="height:156.2px"
+                 data-tip="Gasto no cartão Abr/26: R$ 23.335,61"></div>
+          </div>
+          <span class="mes-label">Abr/26</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra despesa" style="height:124.0px"
+                 data-tip="Gasto no cartão Mai/26: R$ 18.522,54"></div>
+          </div>
+          <span class="mes-label">Mai/26</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra despesa" style="height:84.8px"
+                 data-tip="Gasto no cartão Jun/26: R$ 12.670,58"></div>
+          </div>
+          <span class="mes-label">Jun/26</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra despesa" style="height:104.7px"
+                 data-tip="Gasto no cartão Jul/26: R$ 15.634,37"></div>
+          </div>
+          <span class="mes-label">Jul/26</span>
+        </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Todos os gastos do mês atual, por categoria</h2>
+    <div class="subtitulo" style="margin-bottom:12px;">Inclui Pix e cartão. Total gasto até agora neste mês: R$ 15.636,96</div>
+    
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Eletrônicos</span>
+              <div class="cat-track"><div class="cat-barra" style="width:100.0%"></div></div>
+              <span class="cat-valor">R$ 5.440,35</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *WEWELIFE</td><td class="num">R$ 302,65</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA</td><td class="num">R$ 250,02</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA</td><td class="num">R$ 249,94</td></tr><tr><td>MP*SAMSUNGELETRONICADAAMA</td><td class="num">R$ 249,94</td></tr><tr><td>EC*SAMSUNG</td><td class="num">R$ 211,05</td></tr><tr><td>SHOPEE *OiVidaOficial</td><td class="num">R$ 156,31</td></tr><tr><td>ANTHROPIC* CLAUDE SUB</td><td class="num">R$ 110,00</td></tr><tr><td>ON CASE SELECT</td><td class="num">R$ 59,98</td></tr><tr><td>SHOPEE *amsodloja</td><td class="num">R$ 51,74</td></tr><tr><td>OPENROUTER, INC</td><td class="num">R$ 21,10</td></tr><tr><td>OPENROUTER, INC</td><td class="num">R$ 21,10</td></tr><tr><td>DeepSeek</td><td class="num">R$ 5,30</td></tr><tr><td>DeepSeek</td><td class="num">R$ 2,12</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Escolinha/Creche</span>
+              <div class="cat-track"><div class="cat-barra" style="width:36.3%"></div></div>
+              <span class="cat-valor">R$ 1.974,19</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>BMB         *No Jardim</td><td class="num">R$ 1.974,19</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Mercado</span>
+              <div class="cat-track"><div class="cat-barra" style="width:30.6%"></div></div>
+              <span class="cat-valor">R$ 1.666,41</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>CARREFOUR RJJ 38</td><td class="num">R$ 334,75</td></tr><tr><td>CARREFOUR RJJ 38</td><td class="num">R$ 202,87</td></tr><tr><td>STYLO QUERO FRUTY</td><td class="num">R$ 136,00</td></tr><tr><td>SWIFT RECREIO</td><td class="num">R$ 135,97</td></tr><tr><td>SEARA ALIMENTOS LTDA</td><td class="num">R$ 116,83</td></tr><tr><td>SWIFT RECREIO</td><td class="num">R$ 104,56</td></tr><tr><td>PASTEL 2 IRMAOS</td><td class="num">R$ 52,00</td></tr><tr><td>ClaudioHenrique</td><td class="num">R$ 48,00</td></tr><tr><td>ClaudioHenrique</td><td class="num">R$ 48,00</td></tr><tr><td>PASTEL 2 IRMAOS</td><td class="num">R$ 48,00</td></tr><tr><td>PASTEL 2 IRMAOS</td><td class="num">R$ 40,00</td></tr><tr><td>BRUNO AGUEDA OVELHA</td><td class="num">R$ 39,75</td></tr><tr><td>CARREFOUR SULACAP</td><td class="num">R$ 32,37</td></tr><tr><td>Simonedecarvalhod</td><td class="num">R$ 31,40</td></tr><tr><td>Simonedecarvalhod</td><td class="num">R$ 28,10</td></tr><tr><td>Simonedecarvalhod</td><td class="num">R$ 23,60</td></tr><tr><td>PRIME MARKETS</td><td class="num">R$ 22,40</td></tr><tr><td>Residencial Marechal Masc</td><td class="num">R$ 21,98</td></tr><tr><td>PRIME MARKETS</td><td class="num">R$ 21,47</td></tr><tr><td>PRIME MARKETS</td><td class="num">R$ 20,89</td></tr><tr><td>Simonedecarvalhod</td><td class="num">R$ 19,60</td></tr><tr><td>PRIME MARKETS</td><td class="num">R$ 19,18</td></tr><tr><td>Residencial Marechal Masc</td><td class="num">R$ 18,99</td></tr><tr><td>PRIME MARKETS</td><td class="num">R$ 13,80</td></tr><tr><td>PRIME MARKETS</td><td class="num">R$ 13,80</td></tr><tr><td>PRIME MARKETS</td><td class="num">R$ 12,88</td></tr><tr><td>PRIME MARKETS</td><td class="num">R$ 12,79</td></tr><tr><td>Residencial Marechal Masc</td><td class="num">R$ 10,59</td></tr><tr><td>VV COMERCIO DE DOCES E</td><td class="num">R$ 9,96</td></tr><tr><td>Residencial Marechal Masc</td><td class="num">R$ 8,89</td></tr><tr><td>Residencial Marechal Masc</td><td class="num">R$ 6,90</td></tr><tr><td>CARREFOUR RJJ 38</td><td class="num">R$ 6,19</td></tr><tr><td>Simonedecarvalhod</td><td class="num">R$ 3,90</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Serviços</span>
+              <div class="cat-track"><div class="cat-barra" style="width:16.8%"></div></div>
+              <span class="cat-valor">R$ 912,36</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>HTM*PADRAOAB</td><td class="num">R$ 143,89</td></tr><tr><td>HTM*PADRAOAB</td><td class="num">R$ 143,89</td></tr><tr><td>HTM*PADRAOAB</td><td class="num">R$ 143,89</td></tr><tr><td>HTM*PADRAOAB</td><td class="num">R$ 143,89</td></tr><tr><td>HTM*PADRAOAB</td><td class="num">R$ 143,89</td></tr><tr><td>PG *CONTAJA CONTA</td><td class="num">R$ 137,40</td></tr><tr><td>IG*CompanyHero</td><td class="num">R$ 55,51</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Livraria</span>
+              <div class="cat-track"><div class="cat-barra" style="width:15.5%"></div></div>
+              <span class="cat-valor">R$ 843,79</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>AMAZON BR</td><td class="num">R$ 152,99</td></tr><tr><td>AMAZON MARKETPLACE  CC</td><td class="num">R$ 126,56</td></tr><tr><td>AMAZON MARKETPLACE  CC</td><td class="num">R$ 119,87</td></tr><tr><td>AMAZON MARKETPLACE  CC</td><td class="num">R$ 59,72</td></tr><tr><td>AMAZON MARKETPLACE  CC</td><td class="num">R$ 56,76</td></tr><tr><td>AMAZON BR</td><td class="num">R$ 52,30</td></tr><tr><td>AMAZON MARKETPLACE  CC</td><td class="num">R$ 51,82</td></tr><tr><td>AMAZON BR</td><td class="num">R$ 51,56</td></tr><tr><td>AMAZON BR</td><td class="num">R$ 50,20</td></tr><tr><td>AMAZON BR</td><td class="num">R$ 49,96</td></tr><tr><td>AMAZON BR</td><td class="num">R$ 44,26</td></tr><tr><td>PARC=110LEITURA</td><td class="num">R$ 27,79</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Restaurante</span>
+              <div class="cat-track"><div class="cat-barra" style="width:14.4%"></div></div>
+              <span class="cat-valor">R$ 781,96</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>REAL CHURRASCARIA</td><td class="num">R$ 232,01</td></tr><tr><td>QUERO FRUTY</td><td class="num">R$ 144,00</td></tr><tr><td>QUERO FRUTY</td><td class="num">R$ 123,00</td></tr><tr><td>CALIFORNIA COFFEE</td><td class="num">R$ 97,35</td></tr><tr><td>BacioDiLatte</td><td class="num">R$ 62,90</td></tr><tr><td>BacioDiLatte</td><td class="num">R$ 41,80</td></tr><tr><td>MARIA ACAI VALQUEIRE</td><td class="num">R$ 24,90</td></tr><tr><td>COSECHAS</td><td class="num">R$ 23,50</td></tr><tr><td>COSECHAS</td><td class="num">R$ 23,50</td></tr><tr><td>ALJOVI EMPADAS</td><td class="num">R$ 9,00</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Casa e decoração</span>
+              <div class="cat-track"><div class="cat-barra" style="width:10.0%"></div></div>
+              <span class="cat-valor">R$ 543,41</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *LORRANIBABY</td><td class="num">R$ 79,10</td></tr><tr><td>MLP*Magalu Loja M</td><td class="num">R$ 74,69</td></tr><tr><td>SHOPEE *MADEIRAMADEIRA</td><td class="num">R$ 67,92</td></tr><tr><td>SHOPEE *COZYAMESUACASA</td><td class="num">R$ 66,39</td></tr><tr><td>SHOPEE *RCDecoraes</td><td class="num">R$ 66,36</td></tr><tr><td>SHOPEE *ESSENCIALDETAL</td><td class="num">R$ 64,67</td></tr><tr><td>SHOPEE *CasaDomo</td><td class="num">R$ 63,11</td></tr><tr><td>SHOPEE *CAETANOENXOVAI</td><td class="num">R$ 61,17</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Hospedagem</span>
+              <div class="cat-track"><div class="cat-barra" style="width:8.6%"></div></div>
+              <span class="cat-valor">R$ 465,33</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>HOTEL FAZENDA LAGOS DO</td><td class="num">R$ 465,33</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Escola</span>
+              <div class="cat-track"><div class="cat-barra" style="width:7.1%"></div></div>
+              <span class="cat-valor">R$ 384,49</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>KIWIFY *ComunRatos</td><td class="num">R$ 210,53</td></tr><tr><td>PG *MAESTRIA ACADEMY L</td><td class="num">R$ 97,00</td></tr><tr><td>KIWIFY*RatosOS</td><td class="num">R$ 51,06</td></tr><tr><td>QCONCURSOS</td><td class="num">R$ 25,90</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Compras</span>
+              <div class="cat-track"><div class="cat-barra" style="width:6.6%"></div></div>
+              <span class="cat-valor">R$ 361,52</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *CriptoBikes</td><td class="num">R$ 88,56</td></tr><tr><td>PG *SANTHATELA SA</td><td class="num">R$ 85,88</td></tr><tr><td>AMAZONMKTPLC*RCPRODUTO</td><td class="num">R$ 68,47</td></tr><tr><td>MERCADOLIVRE*MERCADOLIVRE</td><td class="num">R$ 48,65</td></tr><tr><td>AMAZONMKTPLC*AMPLASELE</td><td class="num">R$ 43,96</td></tr><tr><td>MILKY MOO PARQUE SHOPP</td><td class="num">R$ 26,00</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Delivery de comida</span>
+              <div class="cat-track"><div class="cat-barra" style="width:5.6%"></div></div>
+              <span class="cat-valor">R$ 304,91</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>IFD*MOTTA LUIZ ALIMENT</td><td class="num">R$ 114,59</td></tr><tr><td>IFD*CULTIVAR COMERCIO</td><td class="num">R$ 77,90</td></tr><tr><td>IFD*ROCHA GOURMET LTDA</td><td class="num">R$ 60,87</td></tr><tr><td>IFD*PIZZARIA DELIZIE L</td><td class="num">R$ 51,55</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Educação</span>
+              <div class="cat-track"><div class="cat-barra" style="width:3.8%"></div></div>
+              <span class="cat-valor">R$ 208,95</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>HTM*Fellipe Sales-C</td><td class="num">R$ 208,95</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Material de escritório</span>
+              <div class="cat-track"><div class="cat-barra" style="width:3.7%"></div></div>
+              <span class="cat-valor">R$ 199,94</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SHOPEE *LOJAEASYHOUSE</td><td class="num">R$ 199,94</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Pedágio</span>
+              <div class="cat-track"><div class="cat-barra" style="width:3.6%"></div></div>
+              <span class="cat-valor">R$ 198,51</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SEM PARAR</td><td class="num">R$ 198,51</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Posto de gasolina</span>
+              <div class="cat-track"><div class="cat-barra" style="width:3.6%"></div></div>
+              <span class="cat-valor">R$ 198,46</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>AutoPostoDos</td><td class="num">R$ 198,46</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Aeroporto e passagens</span>
+              <div class="cat-track"><div class="cat-barra" style="width:2.6%"></div></div>
+              <span class="cat-valor">R$ 143,77</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>SMILES FIDEL*TxaE</td><td class="num">R$ 97,77</td></tr><tr><td>Smiles Club Smiles</td><td class="num">R$ 46,00</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Vestuário</span>
+              <div class="cat-track"><div class="cat-barra" style="width:2.6%"></div></div>
+              <span class="cat-valor">R$ 143,07</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>ALFAIATARIA SAO L</td><td class="num">R$ 70,00</td></tr><tr><td>SHOPEE *AzzevicheTrico</td><td class="num">R$ 51,07</td></tr><tr><td>POINT DO MILITAR CANTI</td><td class="num">R$ 12,00</td></tr><tr><td>POINT DO MILITAR CANTI</td><td class="num">R$ 10,00</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Jogos</span>
+              <div class="cat-track"><div class="cat-barra" style="width:2.6%"></div></div>
+              <span class="cat-valor">R$ 140,00</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>JIM.COM SYNCRO GAMES E EL</td><td class="num">R$ 140,00</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Artigos esportivos</span>
+              <div class="cat-track"><div class="cat-barra" style="width:2.5%"></div></div>
+              <span class="cat-valor">R$ 134,97</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>MLP*Netshoes NS2C</td><td class="num">R$ 74,99</td></tr><tr><td>MP*VELOCITA</td><td class="num">R$ 59,98</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Óptica</span>
+              <div class="cat-track"><div class="cat-barra" style="width:2.3%"></div></div>
+              <span class="cat-valor">R$ 124,02</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>OticasRIz</td><td class="num">R$ 70,00</td></tr><tr><td>ESGH I L00570 I EOTICA</td><td class="num">R$ 54,02</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Seguro</span>
+              <div class="cat-track"><div class="cat-barra" style="width:1.8%"></div></div>
+              <span class="cat-valor">R$ 100,03</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>AZUL SEGUROS</td><td class="num">R$ 100,03</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Serviços digitais</span>
+              <div class="cat-track"><div class="cat-barra" style="width:1.7%"></div></div>
+              <span class="cat-valor">R$ 93,84</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>EBN    *Canva04928 44</td><td class="num">R$ 24,24</td></tr><tr><td>AmazonPrimeBR</td><td class="num">R$ 19,90</td></tr><tr><td>DL*GOOGLE YouTub</td><td class="num">R$ 16,90</td></tr><tr><td>EBN         *SPOTIFY</td><td class="num">R$ 12,90</td></tr><tr><td>WWW.YCLOUD.COM</td><td class="num">R$ 10,00</td></tr><tr><td>MP*MELIMAIS</td><td class="num">R$ 9,90</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Farmácia</span>
+              <div class="cat-track"><div class="cat-barra" style="width:1.5%"></div></div>
+              <span class="cat-valor">R$ 83,26</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>IFD*DROGARIAS PACHECO</td><td class="num">R$ 62,97</td></tr><tr><td>DROGARIA VENANCIO</td><td class="num">R$ 20,29</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Bicicleta</span>
+              <div class="cat-track"><div class="cat-barra" style="width:1.5%"></div></div>
+              <span class="cat-valor">R$ 80,43</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>CP *AMIGAO 21 SH SULAC</td><td class="num">R$ 46,86</td></tr><tr><td>CP *AMIGAO 21 SH SULAC</td><td class="num">R$ 33,57</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Manutenção do veículo</span>
+              <div class="cat-track"><div class="cat-barra" style="width:0.5%"></div></div>
+              <span class="cat-valor">R$ 29,39</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>MERCADO PAGO*RENO</td><td class="num">R$ 21,00</td></tr><tr><td>MERCADOLIVRE*MERCADOLIVRE</td><td class="num">R$ 8,39</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Bem-estar e academia</span>
+              <div class="cat-track"><div class="cat-barra" style="width:0.5%"></div></div>
+              <span class="cat-valor">R$ 29,00</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>KIWIFY*Claude</td><td class="num">R$ 29,00</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Internet</span>
+              <div class="cat-track"><div class="cat-barra" style="width:0.3%"></div></div>
+              <span class="cat-valor">R$ 16,90</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>Google YouTube</td><td class="num">R$ 16,90</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Estacionamento</span>
+              <div class="cat-track"><div class="cat-barra" style="width:0.3%"></div></div>
+              <span class="cat-valor">R$ 16,00</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>GS PARK ESTACIONAMENTO</td><td class="num">R$ 16,00</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">IOF</span>
+              <div class="cat-track"><div class="cat-barra" style="width:0.3%"></div></div>
+              <span class="cat-valor">R$ 15,11</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>CUSTO TRANS. EXTERIOR-IOF</td><td class="num">R$ 4,03</td></tr><tr><td>CUSTO TRANS. EXTERIOR-IOF</td><td class="num">R$ 3,96</td></tr><tr><td>IOF S/ TRANS INTER REAIS</td><td class="num">R$ 3,85</td></tr><tr><td>CUSTO TRANS. EXTERIOR-IOF</td><td class="num">R$ 1,88</td></tr><tr><td>CUSTO TRANS. EXTERIOR-IOF</td><td class="num">R$ 0,99</td></tr><tr><td>CUSTO TRANS. EXTERIOR-IOF</td><td class="num">R$ 0,40</td></tr></tbody></table>
+        </details>
+        <details class="cat-detalhe">
+          <summary>
+            <div class="linha-cat">
+              <span class="cat-label">Tarifas de cartão</span>
+              <div class="cat-track"><div class="cat-barra" style="width:0.0%"></div></div>
+              <span class="cat-valor">R$ 2,59</span>
+            </div>
+          </summary>
+          <table class="tabela-detalhe"><tbody><tr><td>GASTOS CARTAO DE CREDITO - DOCTO: 3990191</td><td class="num">R$ 2,59</td></tr></tbody></table>
+        </details>
+  </div>
+
+  <details class="card">
+    <summary>Ver histórico (receitas x despesas por mês, categorias)</summary>
+    <div class="tiles" style="margin-top:16px;">
+      <div class="tile"><div class="label">Receitas no período</div><div class="valor">R$ 168.134,63</div></div>
+      <div class="tile"><div class="label">Despesas no período</div><div class="valor">R$ 300.032,52</div></div>
+      <div class="tile"><div class="label">Resultado líquido do período</div><div class="valor critical">R$ -131.897,89</div></div>
+    </div>
+    <div class="card">
+      <h2>Fluxo de caixa mensal</h2>
+      <div class="legenda">
+        <span><span class="dot receita"></span>Receitas</span>
+        <span><span class="dot despesa"></span>Despesas</span>
+      </div>
+      <div class="chart-mensal">
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra receita" style="height:3.9px"
+                 data-tip="Receitas Jul/25: R$ 1.826,22"></div>
+            <div class="barra despesa" style="height:9.6px"
+                 data-tip="Despesas Jul/25: R$ 4.537,82"></div>
+          </div>
+          <span class="mes-label">Jul/25</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra receita" style="height:1.9px"
+                 data-tip="Receitas Ago/25: R$ 900,69"></div>
+            <div class="barra despesa" style="height:160.0px"
+                 data-tip="Despesas Ago/25: R$ 75.257,45"></div>
+          </div>
+          <span class="mes-label">Ago/25</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra receita" style="height:3.1px"
+                 data-tip="Receitas Set/25: R$ 1.472,74"></div>
+            <div class="barra despesa" style="height:19.9px"
+                 data-tip="Despesas Set/25: R$ 9.378,03"></div>
+          </div>
+          <span class="mes-label">Set/25</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra receita" style="height:35.4px"
+                 data-tip="Receitas Out/25: R$ 16.660,66"></div>
+            <div class="barra despesa" style="height:25.9px"
+                 data-tip="Despesas Out/25: R$ 12.195,88"></div>
+          </div>
+          <span class="mes-label">Out/25</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra receita" style="height:36.1px"
+                 data-tip="Receitas Nov/25: R$ 16.995,79"></div>
+            <div class="barra despesa" style="height:42.3px"
+                 data-tip="Despesas Nov/25: R$ 19.889,03"></div>
+          </div>
+          <span class="mes-label">Nov/25</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra receita" style="height:61.4px"
+                 data-tip="Receitas Dez/25: R$ 28.900,17"></div>
+            <div class="barra despesa" style="height:53.3px"
+                 data-tip="Despesas Dez/25: R$ 25.066,30"></div>
+          </div>
+          <span class="mes-label">Dez/25</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra receita" style="height:29.5px"
+                 data-tip="Receitas Jan/26: R$ 13.871,06"></div>
+            <div class="barra despesa" style="height:48.6px"
+                 data-tip="Despesas Jan/26: R$ 22.847,57"></div>
+          </div>
+          <span class="mes-label">Jan/26</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra receita" style="height:23.9px"
+                 data-tip="Receitas Fev/26: R$ 11.223,15"></div>
+            <div class="barra despesa" style="height:56.5px"
+                 data-tip="Despesas Fev/26: R$ 26.553,42"></div>
+          </div>
+          <span class="mes-label">Fev/26</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra receita" style="height:25.3px"
+                 data-tip="Receitas Mar/26: R$ 11.915,28"></div>
+            <div class="barra despesa" style="height:55.7px"
+                 data-tip="Despesas Mar/26: R$ 26.190,92"></div>
+          </div>
+          <span class="mes-label">Mar/26</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra receita" style="height:29.8px"
+                 data-tip="Receitas Abr/26: R$ 14.000,45"></div>
+            <div class="barra despesa" style="height:53.2px"
+                 data-tip="Despesas Abr/26: R$ 25.038,44"></div>
+          </div>
+          <span class="mes-label">Abr/26</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra receita" style="height:27.9px"
+                 data-tip="Receitas Mai/26: R$ 13.146,44"></div>
+            <div class="barra despesa" style="height:47.6px"
+                 data-tip="Despesas Mai/26: R$ 22.380,20"></div>
+          </div>
+          <span class="mes-label">Mai/26</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra receita" style="height:26.8px"
+                 data-tip="Receitas Jun/26: R$ 12.622,59"></div>
+            <div class="barra despesa" style="height:32.0px"
+                 data-tip="Despesas Jun/26: R$ 15.060,50"></div>
+          </div>
+          <span class="mes-label">Jun/26</span>
+        </div>
+        <div class="grupo-mes">
+          <div class="barras">
+            <div class="barra receita" style="height:52.3px"
+                 data-tip="Receitas Jul/26: R$ 24.599,39"></div>
+            <div class="barra despesa" style="height:33.2px"
+                 data-tip="Despesas Jul/26: R$ 15.636,96"></div>
+          </div>
+          <span class="mes-label">Jul/26</span>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Top categorias de despesa</h2>
+      
+        <div class="linha-cat">
+          <span class="cat-label">Automotivo</span>
+          <div class="cat-track">
+            <div class="cat-barra" style="width:100.0%" data-tip="R$ 65.000,00"></div>
+          </div>
+          <span class="cat-valor">R$ 65.000,00</span>
+        </div>
+        <div class="linha-cat">
+          <span class="cat-label">Mercado</span>
+          <div class="cat-track">
+            <div class="cat-barra" style="width:64.4%" data-tip="R$ 41.882,05"></div>
+          </div>
+          <span class="cat-valor">R$ 41.882,05</span>
+        </div>
+        <div class="linha-cat">
+          <span class="cat-label">Serviços</span>
+          <div class="cat-track">
+            <div class="cat-barra" style="width:26.7%" data-tip="R$ 17.329,68"></div>
+          </div>
+          <span class="cat-valor">R$ 17.329,68</span>
+        </div>
+        <div class="linha-cat">
+          <span class="cat-label">Compras</span>
+          <div class="cat-track">
+            <div class="cat-barra" style="width:26.6%" data-tip="R$ 17.272,86"></div>
+          </div>
+          <span class="cat-valor">R$ 17.272,86</span>
+        </div>
+        <div class="linha-cat">
+          <span class="cat-label">Serviços digitais</span>
+          <div class="cat-track">
+            <div class="cat-barra" style="width:22.3%" data-tip="R$ 14.504,73"></div>
+          </div>
+          <span class="cat-valor">R$ 14.504,73</span>
+        </div>
+    </div>
+    <div class="card">
+      <table>
+        <thead><tr><th>Mês</th><th class="num">Receitas</th><th class="num">Despesas</th><th class="num">Líquido</th></tr></thead>
+        <tbody>
+        <tr>
+          <td>Jul/25</td>
+          <td class="num">R$ 1.826,22</td>
+          <td class="num">R$ 4.537,82</td>
+          <td class="num">R$ -2.711,60</td>
+        </tr>
+        <tr>
+          <td>Ago/25</td>
+          <td class="num">R$ 900,69</td>
+          <td class="num">R$ 75.257,45</td>
+          <td class="num">R$ -74.356,76</td>
+        </tr>
+        <tr>
+          <td>Set/25</td>
+          <td class="num">R$ 1.472,74</td>
+          <td class="num">R$ 9.378,03</td>
+          <td class="num">R$ -7.905,29</td>
+        </tr>
+        <tr>
+          <td>Out/25</td>
+          <td class="num">R$ 16.660,66</td>
+          <td class="num">R$ 12.195,88</td>
+          <td class="num">R$ 4.464,78</td>
+        </tr>
+        <tr>
+          <td>Nov/25</td>
+          <td class="num">R$ 16.995,79</td>
+          <td class="num">R$ 19.889,03</td>
+          <td class="num">R$ -2.893,24</td>
+        </tr>
+        <tr>
+          <td>Dez/25</td>
+          <td class="num">R$ 28.900,17</td>
+          <td class="num">R$ 25.066,30</td>
+          <td class="num">R$ 3.833,87</td>
+        </tr>
+        <tr>
+          <td>Jan/26</td>
+          <td class="num">R$ 13.871,06</td>
+          <td class="num">R$ 22.847,57</td>
+          <td class="num">R$ -8.976,51</td>
+        </tr>
+        <tr>
+          <td>Fev/26</td>
+          <td class="num">R$ 11.223,15</td>
+          <td class="num">R$ 26.553,42</td>
+          <td class="num">R$ -15.330,27</td>
+        </tr>
+        <tr>
+          <td>Mar/26</td>
+          <td class="num">R$ 11.915,28</td>
+          <td class="num">R$ 26.190,92</td>
+          <td class="num">R$ -14.275,64</td>
+        </tr>
+        <tr>
+          <td>Abr/26</td>
+          <td class="num">R$ 14.000,45</td>
+          <td class="num">R$ 25.038,44</td>
+          <td class="num">R$ -11.037,99</td>
+        </tr>
+        <tr>
+          <td>Mai/26</td>
+          <td class="num">R$ 13.146,44</td>
+          <td class="num">R$ 22.380,20</td>
+          <td class="num">R$ -9.233,76</td>
+        </tr>
+        <tr>
+          <td>Jun/26</td>
+          <td class="num">R$ 12.622,59</td>
+          <td class="num">R$ 15.060,50</td>
+          <td class="num">R$ -2.437,91</td>
+        </tr>
+        <tr>
+          <td>Jul/26</td>
+          <td class="num">R$ 24.599,39</td>
+          <td class="num">R$ 15.636,96</td>
+          <td class="num">R$ 8.962,43</td>
+        </tr>
+        </tbody>
+      </table>
+    </div>
+  </details>
+</div>
+
+<div id="tooltip"></div>
+<script>
+  const tooltip = document.getElementById('tooltip');
+  document.querySelectorAll('[data-tip]').forEach(function (el) {
+    el.addEventListener('mousemove', function (e) {
+      tooltip.textContent = el.getAttribute('data-tip');
+      tooltip.style.left = (e.clientX + 12) + 'px';
+      tooltip.style.top = (e.clientY + 12) + 'px';
+      tooltip.style.display = 'block';
+    });
+    el.addEventListener('mouseleave', function () { tooltip.style.display = 'none'; });
+  });
+
+  function alternarTema() {
+    const atual = document.documentElement.getAttribute('data-theme');
+    const novo = atual === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', novo);
+    localStorage.setItem('tema-dashboard', novo);
+  }
+  const salvo = localStorage.getItem('tema-dashboard');
+  if (salvo) document.documentElement.setAttribute('data-theme', salvo);
+</script>
+</body>
+</html>

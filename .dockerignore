@@ -1,0 +1,11 @@
+.env
+credentials.json
+token.json
+.tmp/
+dados/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.git/
+dashboard/

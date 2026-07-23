@@ -1,0 +1,83 @@
+# Stack do App Financeiro (dashboard fluxo de caixa + Telegram diário)
+# Deploy no Portainer: Stacks > (app-financeiro) > Editor > cole este conteúdo > Update
+#
+# Este é o TEMPLATE (sem segredos). Copie para deploy/app-financeiro-stack.yml
+# (arquivo real, NUNCA commitado -- está no .gitignore) e preencha os valores
+# reais a partir do .env antes de colar no Portainer.
+#
+# Mesmo padrão do stack "garmin" do PerMax: rede overlay já existente
+# `network_swarm_public`, Traefik v2 com entrypoint `websecure` e
+# certresolver `letsencryptresolver`. Diferença: este app tem domínio
+# PRÓPRIO (não precisa interceptar webhook de outro serviço), então não
+# precisa de PathPrefix/priority -- só Host().
+
+version: "3.8"
+
+services:
+  web:
+    image: ghcr.io/PREENCHER_USUARIO/PREENCHER_REPO:latest
+
+    networks:
+      - network_swarm_public
+
+    command: gunicorn -w 2 -b 0.0.0.0:8000 app:app
+
+    environment:
+      PLUGGY_CLIENT_ID: "PREENCHER"
+      PLUGGY_CLIENT_SECRET: "PREENCHER"
+      PLUGGY_ITEM_ID: "PREENCHER"
+      TELEGRAM_BOT_TOKEN: "PREENCHER"
+      TELEGRAM_CHAT_ID: "PREENCHER"
+      APP_FINANCEIRO_DB: "/app/dados/app_financeiro.db"
+
+    volumes:
+      - dados:/app/dados
+
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/').status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    deploy:
+      mode: replicated
+      replicas: 1
+      labels:
+        - "traefik.enable=1"
+        - "traefik.http.services.appfinanceiro.loadbalancer.server.port=8000"
+
+        - "traefik.http.routers.appfinanceiro.entrypoints=websecure"
+        - "traefik.http.routers.appfinanceiro.rule=Host(`financaspessoais.pelotaopermax.com.br`)"
+        - "traefik.http.routers.appfinanceiro.tls.certresolver=letsencryptresolver"
+        - "traefik.http.routers.appfinanceiro.service=appfinanceiro"
+
+  scheduler:
+    image: ghcr.io/PREENCHER_USUARIO/PREENCHER_REPO:latest
+
+    networks:
+      - network_swarm_public
+
+    command: python scheduler.py
+
+    environment:
+      PLUGGY_CLIENT_ID: "PREENCHER"
+      PLUGGY_CLIENT_SECRET: "PREENCHER"
+      PLUGGY_ITEM_ID: "PREENCHER"
+      TELEGRAM_BOT_TOKEN: "PREENCHER"
+      TELEGRAM_CHAT_ID: "PREENCHER"
+      APP_FINANCEIRO_DB: "/app/dados/app_financeiro.db"
+
+    volumes:
+      - dados:/app/dados
+
+    deploy:
+      mode: replicated
+      replicas: 1
+
+volumes:
+  dados:
+
+networks:
+  network_swarm_public:
+    external: true

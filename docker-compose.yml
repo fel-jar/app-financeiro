@@ -1,0 +1,32 @@
+# Uso LOCAL apenas (docker compose up), pra testar a imagem antes de mandar
+# pra VPS. O deploy real de produção usa deploy/app-financeiro-stack.yml
+# (Docker Swarm + Traefik, ver directives/dashboard_fluxo_caixa.md).
+services:
+  web:
+    image: app-financeiro:latest
+    build: .
+    command: gunicorn -w 2 -b 0.0.0.0:8000 app:app
+    ports:
+      - "8000:8000"
+    volumes:
+      - dados:/app/dados
+    environment:
+      - APP_FINANCEIRO_DB=/app/dados/app_financeiro.db
+    env_file:
+      - .env
+    restart: unless-stopped
+
+  scheduler:
+    image: app-financeiro:latest
+    build: .
+    command: python scheduler.py
+    volumes:
+      - dados:/app/dados
+    environment:
+      - APP_FINANCEIRO_DB=/app/dados/app_financeiro.db
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  dados:
