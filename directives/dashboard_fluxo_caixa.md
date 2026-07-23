@@ -408,3 +408,121 @@ sync.py ──────────► SQLite (dados/app_financeiro.db)
 4. Se o usuário conectar outro banco/cartão fora do Bradesco, repetir o
    fluxo do meu.pluggy.ai e adicionar o novo item (múltiplos items por
    `.env` ainda não suportado — hoje só lê `PLUGGY_ITEM_ID` único).
+
+## Status atual (2026-07-23) — EM PRODUÇÃO NA VPS
+
+Objetivo final do usuário: agente Telegram diário reportando gasto do dia,
+categoria da compra, quanto ainda cabe no orçamento da categoria e quanto
+resta no mês. Isso exigiu banco de dados (persistência real-time) e deploy
+na mesma VPS do PerMax. Tudo abaixo foi testado em produção, não só localmente.
+
+### Arquitetura de produção
+- **`execution/db.py`**: SQLite (`dados/app_financeiro.db`), tabelas
+  `transacoes`, `contas`, `gastos_fixos`, `orcamento_categoria`, `meta`.
+  `db.inicializar()` roda `CREATE TABLE IF NOT EXISTS` — idempotente.
+- **`execution/sync.py`**: Pluggy → banco. Upsert por `ON CONFLICT DO UPDATE`
+  sem nunca tocar `description_custom` (preserva edições manuais mesmo em
+  resync — testado explicitamente). Idempotente (rodar 2x não duplica).
+- **`execution/app.py`**: Flask servindo o dashboard do banco + páginas de
+  edição (`/transacao/<id>/editar`, `/orcamento`, `/fixos/<mes>`).
+- **`execution/telegram_diario.py`**: monta e envia o resumo diário via
+  Telegram Bot API. Bot: `@gestor_fin_lima_bot`. Credenciais no `.env`
+  (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — chat_id obtido via
+  `getUpdates` depois que o usuário mandou uma mensagem pro bot).
+- **`execution/scheduler.py`**: loop simples (sem cron/APScheduler). Roda
+  `sync.py` + `telegram_diario.py` 1x/dia às 8h **e também um ciclo
+  imediato ao subir** (ver bug abaixo).
+
+### Deploy: Docker Swarm na VPS do PerMax (não Compose solto)
+Mesmo padrão do `garmin-hub` (ver `~/.claude/PerMax/Sistema/directives/deploy_producao.md`):
+VPS Hostinger, Docker Swarm de nó único, Traefik v2.11 na rede overlay
+`network_swarm_public`, certificado via `letsencryptresolver`.
+
+- **Repo GitHub**: `fel-jar/app-financeiro`, **privado** (código com lógica
+  financeira fica fora de olhares públicos).
+- **`.github/workflows/build.yml`**: build+push simples pro GHCR a cada push
+  na `main` (sem job de teste — não há suite de testes no projeto).
+- **Pacote GHCR**: marcado **público** (Package settings > Change
+  visibility) — decisão consciente: repo privado + pacote público é o
+  padrão já usado no PerMax ("a imagem não contém segredos"), evita ter que
+  gerenciar `docker login`/PAT na VPS pro Swarm puxar a imagem.
+  **Pegadinha**: mudar a visibilidade do pacote não é instantâneo — depois
+  de confirmar "Change visibility", ainda demorou até funcionar o pull
+  anônimo (`curl https://ghcr.io/token?scope=repository:.../pull...`
+  retornando 401 por um tempo mesmo após a confirmação). Testar com esse
+  curl (ou `docker pull` anônimo) antes de assumir que já propagou.
+- **`deploy/app-financeiro-stack.yml`** (gitignored, tem segredos reais) e
+  `deploy/app-financeiro-stack.example.yml` (template committed): 2
+  serviços Swarm (`web` com gunicorn, `scheduler`), volume nomeado `dados`
+  compartilhado entre os dois (seguro porque o Swarm é nó único — em
+  múltiplos nós o volume local não seria compartilhado).
+- **Domínio próprio** `financaspessoais.pelotaopermax.com.br` (não precisa
+  de PathPrefix/priority como o `n8nwebhooks` do garmin — dono exclusivo do
+  Host, igual `sistema.pelotaopermax.com.br`/`treinos.pelotaopermax.com.br`).
+- Deploy: `docker stack deploy -c - app-financeiro --with-registry-auth`
+  via stdin sobre SSH (mesmo método do PerMax). Update de imagem sem mudar
+  labels/env: `docker service update --image ... --with-registry-auth
+  --force <serviço>`.
+
+### Bug crítico encontrado e corrigido em produção: banco sem tabelas sob gunicorn
+`app.py` só chamava `db.inicializar()` dentro de `if __name__ == "__main__":`
+— isso NUNCA roda quando o Flask é servido via `gunicorn app:app` (gunicorn
+importa o módulo, não executa o bloco `__main__`). Resultado: o container
+subia com um SQLite vazio (sem `CREATE TABLE`), toda request em `/` dava
+`sqlite3.OperationalError: no such table: transacoes`, o worker gunicorn
+não tratava isso como fatal mas a cada nova conexão o healthcheck ficava
+"Starting" indefinidamente enquanto tasks antigas ficavam em crash-loop
+(`Shutdown/Complete` repetido). **Fix**: mover `db.inicializar()` pra nível
+de módulo (roda sempre, em qualquer worker, idempotente por causa do
+`CREATE TABLE IF NOT EXISTS`).
+
+Problema relacionado: o `scheduler.py` só rodava o primeiro `sync.py` no
+próximo horário agendado (8h) — num deploy novo, o dashboard ficava com
+tabela vazia por até várias horas mesmo depois do fix acima. **Fix**: rodar
+um `rodar_ciclo()` imediato ao subir, antes de entrar no loop de espera.
+Efeito colateral aceito: todo restart do scheduler (redeploy, reboot da
+VPS) dispara uma mensagem Telegram extra — aceitável, é raro e serve como
+confirmação de que subiu.
+
+### DNS + certificado — timing importa
+Criar o registro DNS (A, `financaspessoais` → `147.79.81.66`, sem proxy)
+DEPOIS de o Traefik já ter tentado emitir o certificado faz a tentativa
+falhar com `DNS problem: NXDOMAIN` (visto no log:
+`docker exec $(docker ps -q -f name=traefik_traefik) sh -c "grep -a
+'financaspessoais\|acme' /var/log/traefik/traefik.log"`). O Traefik **não
+tenta de novo sozinho** depois dessa falha — fica servindo o certificado
+default (`CN=TRAEFIK DEFAULT CERT`) indefinidamente. Fix: com o DNS já
+propagado, forçar `docker service update --force traefik_traefik`
+(reinicia o Traefik, que reprocessa certificados no start). Isso afeta
+TODOS os serviços atrás do Traefik por alguns segundos — pedir confirmação
+do usuário antes (é serviço compartilhado, não só deste projeto). Depois
+do restart, confirmado `issuer=Let's Encrypt` real via `openssl s_client`.
+
+### Verificação final (2026-07-23)
+- `https://financaspessoais.pelotaopermax.com.br/` → HTTP 200, certificado
+  Let's Encrypt real, dashboard renderizando dados reais (Caixa disponível
+  R$ 18.576,05).
+- Scheduler rodou sync real (2445 transações) e mandou o resumo diário real
+  pro Telegram assim que subiu.
+- Todos os outros serviços da VPS (n8n, Chatwoot, Evolution API, Portainer,
+  RabbitMQ, Redis, garmin-hub, site) seguiram saudáveis (`1/1`) depois do
+  restart do Traefik.
+
+### Pendente
+1. **Cartão Elo da esposa**: usuário conectou a conta bancária da esposa
+   (2ª titular, mesma conta corrente PJ/PF do usuário) usando o MESMO item
+   Pluggy (não é um item novo — "coloquei como se fosse minha"). Isso vai
+   trazer o cartão Elo dela (dado novo) mas também vai duplicar a conta
+   corrente (mesmo saldo aparecendo 2x). Verificado em 2026-07-23 que a
+   Pluggy ainda não atualizou a conexão (`list_accounts` só mostra as 4
+   contas de sempre do Felipe). **Regra combinada com o usuário para quando
+   aparecer**: incluir só as contas `CREDIT` da esposa (cartão Elo) nos
+   gastos/fatura; ignorar completamente as contas `BANK` dela (evita
+   duplicar `Caixa disponível`). Implementar com os dados reais em mãos, não
+   às cegas — os nomes/números de conta podem não bater exatamente como
+   esperado.
+2. **`orcamento_categoria`**: valores ainda são só sugestão (média histórica
+   de 3 meses), não confirmados pelo usuário como metas reais — revisar em
+   `/orcamento` quando o usuário quiser.
+3. Sem testes automatizados no projeto — o workflow do GitHub Actions não
+   tem job de teste (diferente do garmin-hub do PerMax).
