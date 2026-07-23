@@ -38,6 +38,9 @@ def rodar_ciclo():
 
 
 if __name__ == "__main__":
+    print(f"[{datetime.now().isoformat()}] Rodando ciclo inicial (garante dados assim que o serviço sobe)...")
+    rodar_ciclo()
+
     while True:
         alvo = proxima_execucao()
         espera = (alvo - datetime.now()).total_seconds()

@@ -13,6 +13,7 @@ from gerar_dashboard import montar_html, fmt_brl
 from normalizacao import traduzir_categoria
 
 app = Flask(__name__)
+db.inicializar()
 
 ESTILO_PAGINA_SIMPLES = """
 <style>
@@ -152,5 +153,4 @@ def fixos_mes(mes):
 
 
 if __name__ == "__main__":
-    db.inicializar()
     app.run(host="0.0.0.0", port=8000, debug=True)
