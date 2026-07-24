@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS transacoes (
     date TEXT NOT NULL,
     description TEXT,
     description_custom TEXT,
+    categoria_grande_custom TEXT,
     category TEXT,
     amount REAL NOT NULL,
     type TEXT,
@@ -50,8 +51,20 @@ CREATE TABLE IF NOT EXISTS gastos_fixos (
     forma TEXT NOT NULL,
     valor REAL NOT NULL,
     categoria TEXT,
+    transacao_id_origem TEXT,
     PRIMARY KEY (mes, nome)
 );
+
+CREATE TABLE IF NOT EXISTS gastos_variaveis_manuais (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mes TEXT NOT NULL,
+    descricao TEXT NOT NULL,
+    forma TEXT NOT NULL DEFAULT 'pix',
+    valor REAL NOT NULL,
+    categoria TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_variaveis_manuais_mes ON gastos_variaveis_manuais(mes);
 
 CREATE TABLE IF NOT EXISTS orcamento_categoria (
     categoria TEXT PRIMARY KEY,
@@ -91,13 +104,20 @@ def _migrar(conexao: sqlite3.Connection):
     de forma independente) -- sem isso, dois processos podem checar "coluna
     não existe" ao mesmo tempo e um deles quebra com "duplicate column
     name" ao tentar o ALTER (visto em produção em 2026-07-24)."""
-    colunas = {row["name"] for row in conexao.execute("PRAGMA table_info(gastos_fixos)")}
-    if "categoria" not in colunas:
-        try:
-            conexao.execute("ALTER TABLE gastos_fixos ADD COLUMN categoria TEXT")
-        except sqlite3.OperationalError as e:
-            if "duplicate column name" not in str(e):
-                raise
+    _adicionar_coluna_se_faltando(conexao, "gastos_fixos", "categoria", "TEXT")
+    _adicionar_coluna_se_faltando(conexao, "gastos_fixos", "transacao_id_origem", "TEXT")
+    _adicionar_coluna_se_faltando(conexao, "transacoes", "categoria_grande_custom", "TEXT")
+
+
+def _adicionar_coluna_se_faltando(conexao: sqlite3.Connection, tabela: str, coluna: str, tipo: str):
+    colunas = {row["name"] for row in conexao.execute(f"PRAGMA table_info({tabela})")}
+    if coluna in colunas:
+        return
+    try:
+        conexao.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
+    except sqlite3.OperationalError as e:
+        if "duplicate column name" not in str(e):
+            raise
 
 
 @contextmanager

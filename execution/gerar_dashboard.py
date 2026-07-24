@@ -11,7 +11,7 @@ from pathlib import Path
 from pluggy_client import from_env
 from mock_data import gerar_transacoes
 from email_source import buscar_transacoes as buscar_transacoes_email
-from gastos_fixos import GASTOS_FIXOS, valor_planejamento, total_fixo_mensal, eh_transacao_do_fixo
+from gastos_fixos import GASTOS_FIXOS, valor_planejamento, total_fixo_mensal
 from normalizacao import traduzir_categoria, normalizar_transacoes_pluggy, CATEGORIA_RENDA_EXTRA
 from categorias_grandes import grande_categoria
 
@@ -139,6 +139,7 @@ def construir_panorama_mensal(
     transacoes: list[dict],
     saldo: float | None,
     gastos_fixos_por_mes: dict[str, list[dict]] | None = None,
+    variaveis_manuais_por_mes: dict[str, list[dict]] | None = None,
     meses_futuros: int = 5,
 ) -> list[dict]:
     """Monta o painel mês a mês: mês atual + próximos `meses_futuros`, cada
@@ -164,23 +165,21 @@ def construir_panorama_mensal(
     entrada_prevista = salario_medio + renda_extra_media
 
     fixas_mes_atual = _fixas_do_mes(mes_atual, gastos_fixos_por_mes)
-
-    def eh_fixo(descricao: str, categoria_pt: str) -> bool:
-        return any(eh_transacao_do_fixo(f["nome"], descricao, categoria_pt) for f in fixas_mes_atual)
+    ids_convertidos_em_fixo = {f["transacao_id_origem"] for f in fixas_mes_atual if f.get("transacao_id_origem")}
 
     variaveis_atual: list[dict] = []
     for t in transacoes_mes_atual(transacoes):
         if t["amount"] >= 0:
             continue
+        if t.get("id") in ids_convertidos_em_fixo:
+            continue
         categoria_pt = traduzir_categoria(t.get("category") or "Outros")
         descricao = t.get("description") or t.get("descriptionRaw") or "—"
-        if eh_fixo(descricao, categoria_pt):
-            continue
         variaveis_atual.append({
             "id": t.get("id"),
             "descricao": descricao,
             "categoria": categoria_pt,
-            "categoria_grande": grande_categoria(categoria_pt),
+            "categoria_grande": t.get("categoriaGrandeCustom") or grande_categoria(categoria_pt),
             "forma": "cartao" if t.get("creditCardMetadata") else "pix",
             "valor": abs(t["amount"]),
             "parcela": None,
@@ -209,7 +208,7 @@ def construir_panorama_mensal(
                 "id": t.get("id"),
                 "descricao": descricao,
                 "categoria": categoria_pt,
-                "categoria_grande": grande_categoria(categoria_pt),
+                "categoria_grande": t.get("categoriaGrandeCustom") or grande_categoria(categoria_pt),
                 "forma": "cartao",
                 "valor": valor,
                 "parcela": f"{atual_parc + i}/{total_parc}",
@@ -224,6 +223,11 @@ def construir_panorama_mensal(
         fixas_total = sum(it["valor"] for it in fixas_itens)
 
         variaveis_itens = variaveis_atual if i == 0 else detalhe_futuro.get(mes, [])
+        manuais_mes = [
+            {**it, "categoria_grande": it["categoria"]}
+            for it in (variaveis_manuais_por_mes or {}).get(mes, [])
+        ]
+        variaveis_itens = variaveis_itens + manuais_mes
         variaveis_total = sum(it["valor"] for it in variaveis_itens)
 
         necessario = fixas_total + variaveis_total
@@ -232,6 +236,7 @@ def construir_panorama_mensal(
 
         linhas.append({
             "mes": mes,
+            "eh_atual": i == 0,
             "fixas_itens": fixas_itens,
             "fixas_total": fixas_total,
             "variaveis_itens": sorted(variaveis_itens, key=lambda d: -d["valor"]),
@@ -259,11 +264,16 @@ def fmt_brl_ou_indisponivel(valor: float | None) -> str:
     return "Indisponível" if valor is None else fmt_brl(valor)
 
 
-def render_classe_por_categoria(itens: list[dict], chave_nome: str) -> str:
+def render_classe_por_categoria(itens: list[dict], chave_nome: str, permitir_tornar_fixo: bool = False) -> str:
     """Agrupa itens (fixas ou variáveis) por grande categoria e renderiza
     cada grupo como <details> expansível -- mesmo padrão visual de
     render_categorias_expansivel, mas agrupando por categoria_grande e
-    mostrando a forma de pagamento (pix/cartão) ao lado de cada item."""
+    mostrando a forma de pagamento (pix/cartão) ao lado de cada item.
+
+    `permitir_tornar_fixo` (só nas Variáveis do mês atual) acrescenta um
+    botão "→ fixo" que promove aquela transação real a gasto fixo
+    recorrente -- ver /transacao/<id>/tornar-fixo em app.py. Não se aplica
+    a parcelas futuras (têm `parcela` preenchido)."""
     if not itens:
         return '<p class="subtitulo">Nenhum lançamento.</p>'
 
@@ -283,7 +293,14 @@ def render_classe_por_categoria(itens: list[dict], chave_nome: str) -> str:
             forma_txt = " · Pix" if i.get("forma") == "pix" else " · Cartão" if i.get("forma") == "cartao" else ""
             parcela_txt = f" ({i['parcela']})" if i.get("parcela") else ""
             editar = f' <a class="editar-link" href="/transacao/{i["id"]}/editar">✎</a>' if i.get("id") else ""
-            linhas_item += f"""<tr><td>{nome}{forma_txt}{parcela_txt}{editar}</td><td class="num">{fmt_brl(i['valor'])}</td></tr>"""
+            tornar_fixo = ""
+            if permitir_tornar_fixo and i.get("id") and not i.get("parcela"):
+                tornar_fixo = (
+                    f'<form method="post" action="/transacao/{i["id"]}/tornar-fixo" style="display:inline;" '
+                    f'onsubmit="return confirm(\'Tornar este lançamento um gasto fixo recorrente?\');">'
+                    f'<button type="submit" class="link-botao">→ fixo</button></form>'
+                )
+            linhas_item += f"""<tr><td>{nome}{forma_txt}{parcela_txt}{editar} {tornar_fixo}</td><td class="num">{fmt_brl(i['valor'])}</td></tr>"""
         linhas += f"""
         <details class="cat-detalhe">
           <summary>
@@ -299,13 +316,16 @@ def render_classe_por_categoria(itens: list[dict], chave_nome: str) -> str:
 
 
 def render_classe_expansivel(
-    titulo: str, itens: list[dict], chave_nome: str, total: float, mes: str | None = None
+    titulo: str, itens: list[dict], chave_nome: str, total: float,
+    mes: str | None = None, permitir_tornar_fixo: bool = False, editar_href: str | None = None,
 ) -> str:
     """Card "Fixas" ou "Variáveis" do painel do mês: total no cabeçalho,
-    corpo agrupado por grande categoria. `mes` (só em Fixas) acrescenta o
-    link pra /fixos/<mes>, onde os valores são editáveis."""
-    corpo = render_classe_por_categoria(itens, chave_nome)
-    editar_link = f' <a class="editar-link" href="/fixos/{mes}">✎ editar</a>' if mes else ""
+    corpo agrupado por grande categoria. `mes` acrescenta o link pra
+    /fixos/<mes> (Fixas); `editar_href` sobrescreve com outra URL (usado
+    pra /variaveis/<mes>, onde dá pra incluir gasto manual em pix)."""
+    corpo = render_classe_por_categoria(itens, chave_nome, permitir_tornar_fixo=permitir_tornar_fixo)
+    href = editar_href or (f"/fixos/{mes}" if mes else None)
+    editar_link = f' <a class="editar-link" href="{href}">✎ editar</a>' if href else ""
     return f"""
   <details class="detalhe-fatura" open>
     <summary>
@@ -326,10 +346,15 @@ def render_mes_panorama(linha: dict, aberto: bool) -> str:
         badge_classe = "good" if cobre else "critical"
         badge = f'<span class="badge {badge_classe}">{badge_texto}</span>'
 
+    caixa_inicio_classe = "" if linha["caixa_inicio"] is None else ("good" if linha["caixa_inicio"] >= 0 else "critical")
     saldo_final_classe = "good" if (linha["saldo_final"] or 0) >= 0 else "critical"
     open_attr = " open" if aberto else ""
     fixas_html = render_classe_expansivel("Fixas", linha["fixas_itens"], "nome", linha["fixas_total"], mes=linha["mes"])
-    variaveis_html = render_classe_expansivel("Variáveis", linha["variaveis_itens"], "descricao", linha["variaveis_total"])
+    variaveis_html = render_classe_expansivel(
+        "Variáveis", linha["variaveis_itens"], "descricao", linha["variaveis_total"],
+        permitir_tornar_fixo=linha.get("eh_atual", False),
+        editar_href=f"/variaveis/{linha['mes']}",
+    )
 
     return f"""
   <details class="card mes-panorama"{open_attr}>
@@ -338,9 +363,9 @@ def render_mes_panorama(linha: dict, aberto: bool) -> str:
       {badge}
     </summary>
     <div class="tiles" style="margin-top:14px;">
-      <div class="tile"><div class="label">Total necessário</div><div class="valor">{fmt_brl(linha['necessario'])}</div></div>
-      <div class="tile"><div class="label">Caixa no início do mês</div><div class="valor">{fmt_brl_ou_indisponivel(linha['caixa_inicio'])}</div></div>
+      <div class="tile"><div class="label">Caixa no início do mês</div><div class="valor {caixa_inicio_classe}">{fmt_brl_ou_indisponivel(linha['caixa_inicio'])}</div></div>
       <div class="tile"><div class="label">Entrada prevista</div><div class="valor">{fmt_brl(linha['entrada'])}</div></div>
+      <div class="tile"><div class="label">Despesas totais</div><div class="valor warn">{fmt_brl(linha['necessario'])}</div></div>
       <div class="tile"><div class="label">Saldo projetado no fim do mês</div><div class="valor {saldo_final_classe}">{fmt_brl_ou_indisponivel(linha['saldo_final'])}</div></div>
     </div>
     <div style="margin-top:14px;">
@@ -355,6 +380,7 @@ def montar_html(
     saldo: float | None,
     gastos_fixos_por_mes: dict[str, list[dict]] | None = None,
     caixa_externo: float = 0.0,
+    variaveis_manuais_por_mes: dict[str, list[dict]] | None = None,
 ) -> str:
     meses = agregar_por_mes(transacoes)
     categorias = agregar_categorias_despesa(transacoes)
@@ -366,18 +392,14 @@ def montar_html(
     # caixa geral E no "Caixa no início do mês" de cada card mensal.
     saldo_com_externo = None if saldo is None else saldo + caixa_externo
 
-    panorama = construir_panorama_mensal(transacoes, saldo_com_externo, gastos_fixos_por_mes)
+    panorama = construir_panorama_mensal(transacoes, saldo_com_externo, gastos_fixos_por_mes, variaveis_manuais_por_mes)
     mes_atual = datetime.now().strftime("%Y-%m")
     itens_mes_atual = gastos_fixos_por_mes.get(mes_atual) if gastos_fixos_por_mes else None
     total_fixo = sum(i["valor"] for i in itens_mes_atual) if itens_mes_atual else total_fixo_mensal()
 
     salario_medio = salario_medio_recente(transacoes)
-    renda_extra_media = renda_extra_media_recente(transacoes)
     sobra_fixa = None if salario_medio is None else salario_medio - total_fixo
     renda_extra_necessaria = max(0.0, -sobra_fixa) if sobra_fixa is not None else None
-    sobra_fixa_com_extra = None
-    if salario_medio is not None:
-        sobra_fixa_com_extra = salario_medio + (renda_extra_media or 0.0) - total_fixo
 
     gasto_cartao_mes = gasto_cartao_por_mes(transacoes)
     max_gasto_cartao_mes = max(gasto_cartao_mes.values(), default=1) or 1
@@ -444,7 +466,6 @@ def montar_html(
 
     resultado_classe = "good" if resultado >= 0 else "critical"
     sobra_fixa_classe = "good" if (sobra_fixa or 0) >= 0 else "critical"
-    sobra_fixa_com_extra_classe = "good" if (sobra_fixa_com_extra or 0) >= 0 else "critical"
 
     return f"""<!doctype html>
 <html lang="pt-br">
@@ -459,7 +480,7 @@ def montar_html(
     --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #898781;
     --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
     --receita: {COR_RECEITA_LIGHT}; --despesa: {COR_DESPESA_LIGHT};
-    --good: #0ca30c; --critical: #d03b3b;
+    --good: #0ca30c; --critical: #d03b3b; --warn: #b8860b;
   }}
   @media (prefers-color-scheme: dark) {{
     :root:where(:not([data-theme="light"])) {{
@@ -468,7 +489,7 @@ def montar_html(
       --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
       --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
       --receita: {COR_RECEITA_DARK}; --despesa: {COR_DESPESA_DARK};
-      --good: #0ca30c; --critical: #e66767;
+      --good: #0ca30c; --critical: #e66767; --warn: #d4a017;
     }}
   }}
   :root[data-theme="dark"] {{
@@ -477,7 +498,7 @@ def montar_html(
     --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #898781;
     --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
     --receita: {COR_RECEITA_DARK}; --despesa: {COR_DESPESA_DARK};
-    --good: #0ca30c; --critical: #e66767;
+    --good: #0ca30c; --critical: #e66767; --warn: #d4a017;
   }}
   * {{ box-sizing: border-box; }}
   body {{
@@ -498,6 +519,7 @@ def montar_html(
   .tile .valor {{ font-size: 22px; font-weight: 600; }}
   .tile .valor.good {{ color: var(--good); }}
   .tile .valor.critical {{ color: var(--critical); }}
+  .tile .valor.warn {{ color: var(--warn); }}
   .card {{ background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 20px; }}
   .card h2 {{ font-size: 14px; margin: 0 0 16px; color: var(--text-secondary); font-weight: 600; }}
   .legenda {{ display: flex; gap: 16px; margin-bottom: 12px; font-size: 12px; color: var(--text-secondary); }}
@@ -543,6 +565,8 @@ def montar_html(
   details.card summary {{ list-style: revert; }}
   .editar-link {{ color: var(--text-muted); text-decoration: none; font-size: 11px; }}
   .editar-link:hover {{ color: var(--text-primary); }}
+  .link-botao {{ background: none; border: none; padding: 0; margin: 0; color: var(--text-muted); font-size: 11px; cursor: pointer; text-decoration: underline; font-family: inherit; }}
+  .link-botao:hover {{ color: var(--text-primary); }}
   .form-edicao {{ max-width: 420px; }}
   .form-edicao label {{ display: block; font-size: 12px; color: var(--text-secondary); margin: 12px 0 4px; }}
   .form-edicao input {{ width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--page); color: var(--text-primary); font-size: 14px; }}
@@ -563,13 +587,6 @@ def montar_html(
       <button id="toggle-tema" onclick="alternarTema()">Alternar tema</button>
     </div>
   </header>
-
-  <div class="tiles">
-    <div class="tile"><div class="label">Caixa disponível</div><div class="valor">{fmt_brl_ou_indisponivel(saldo_com_externo)}</div></div>
-    <div class="tile"><div class="label">Salário médio</div><div class="valor">{fmt_brl_ou_indisponivel(salario_medio)}</div></div>
-    <div class="tile"><div class="label">Renda extra média</div><div class="valor">{fmt_brl_ou_indisponivel(renda_extra_media)}</div></div>
-    <div class="tile"><div class="label">Sobra com renda extra (antes do variável)</div><div class="valor {sobra_fixa_com_extra_classe}">{fmt_brl_ou_indisponivel(sobra_fixa_com_extra)}</div></div>
-  </div>
 
   <h2 class="secao-titulo">Panorama mês a mês</h2>
   {painel_meses_html}
