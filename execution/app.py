@@ -8,7 +8,7 @@ Em produção (VPS): servido via gunicorn atrás do Traefik (ver Dockerfile).
 from flask import Flask, redirect, request
 
 import db
-from dados_db import carregar_transacoes_do_banco, carregar_gastos_fixos_do_banco
+from dados_db import carregar_transacoes_do_banco, carregar_gastos_fixos_do_banco, carregar_caixa_externo
 from gerar_dashboard import montar_html, fmt_brl
 from normalizacao import traduzir_categoria
 
@@ -35,7 +35,8 @@ ESTILO_PAGINA_SIMPLES = """
 def dashboard():
     transacoes, saldo = carregar_transacoes_do_banco()
     gastos_fixos_por_mes = carregar_gastos_fixos_do_banco()
-    return montar_html(transacoes, saldo, gastos_fixos_por_mes)
+    caixa_externo = carregar_caixa_externo()
+    return montar_html(transacoes, saldo, gastos_fixos_por_mes, caixa_externo)
 
 
 @app.route("/transacao/<transacao_id>/editar", methods=["GET", "POST"])
@@ -148,6 +149,35 @@ def fixos_mes(mes):
       <h1>Gastos fixos — {mes}</h1>
       <form method="post">
         <table>{linhas_html}</table>
+        <button type="submit">Salvar</button>
+      </form>
+    </div>"""
+
+
+@app.route("/caixa-externo", methods=["GET", "POST"])
+def caixa_externo():
+    with db.sessao() as conexao:
+        if request.method == "POST":
+            valor_str = request.form.get("valor", "0").strip()
+            try:
+                valor = float(valor_str.replace(",", "."))
+            except ValueError:
+                valor = 0.0
+            db.definir_meta(conexao, "caixa_externo", str(valor))
+            return redirect("/")
+
+        valor_atual = db.obter_meta(conexao, "caixa_externo") or "0"
+
+    return f"""{ESTILO_PAGINA_SIMPLES}
+    <div class="wrap">
+      <a class="voltar" href="/">&larr; voltar</a>
+      <h1>Caixa externo</h1>
+      <p>Dinheiro/contas fora do Pluggy (ex.: dinheiro em espécie, conta em
+         banco não conectado) -- soma no "Caixa disponível" do topo e no
+         "Caixa no início do mês" de cada card do painel mensal.</p>
+      <form method="post">
+        <label>Valor total (R$)</label>
+        <input type="text" name="valor" value="{valor_atual}">
         <button type="submit">Salvar</button>
       </form>
     </div>"""

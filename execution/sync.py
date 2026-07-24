@@ -89,8 +89,15 @@ def seed_gastos_fixos(conexao):
         mes = _mes_seguinte(mes_atual, i)
         for item in GASTOS_FIXOS:
             conexao.execute(
-                "INSERT OR IGNORE INTO gastos_fixos (mes, nome, forma, valor) VALUES (?, ?, ?, ?)",
-                (mes, item["nome"], item.get("forma", "cartao"), valor_planejamento(item)),
+                "INSERT OR IGNORE INTO gastos_fixos (mes, nome, forma, valor, categoria) VALUES (?, ?, ?, ?, ?)",
+                (mes, item["nome"], item.get("forma", "cartao"), valor_planejamento(item), item.get("categoria", "Outros")),
+            )
+            # Backfill: linhas seedadas antes da coluna categoria existir
+            # ficam com NULL -- preenche sem sobrescrever edição nenhuma
+            # (só o campo categoria, nunca o valor).
+            conexao.execute(
+                "UPDATE gastos_fixos SET categoria = ? WHERE mes = ? AND nome = ? AND categoria IS NULL",
+                (item.get("categoria", "Outros"), mes, item["nome"]),
             )
 
 

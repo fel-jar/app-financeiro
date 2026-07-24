@@ -46,17 +46,26 @@ def carregar_transacoes_do_banco() -> tuple[list[dict], float | None]:
 
 
 def carregar_gastos_fixos_do_banco() -> dict[str, list[dict]]:
-    """Retorna {mes: [{nome, forma, valor}, ...]} com os valores já editados
-    pelo usuário via /fixos/<mes> -- é a fonte de verdade que o painel
-    mês a mês (e o link "editar") deve usar, em vez da lista estática."""
+    """Retorna {mes: [{nome, forma, valor, categoria}, ...]} com os valores
+    já editados pelo usuário via /fixos/<mes> -- é a fonte de verdade que o
+    painel mês a mês (e o link "editar") deve usar, em vez da lista estática."""
     with db.sessao() as conexao:
         linhas = conexao.execute(
-            "SELECT mes, nome, forma, valor FROM gastos_fixos ORDER BY mes, forma, nome"
+            "SELECT mes, nome, forma, valor, categoria FROM gastos_fixos ORDER BY mes, forma, nome"
         ).fetchall()
 
     por_mes: dict[str, list[dict]] = {}
     for r in linhas:
-        por_mes.setdefault(r["mes"], []).append(
-            {"nome": r["nome"], "forma": r["forma"], "valor": r["valor"]}
-        )
+        por_mes.setdefault(r["mes"], []).append({
+            "nome": r["nome"], "forma": r["forma"], "valor": r["valor"],
+            "categoria": r["categoria"] or "Outros",
+        })
     return por_mes
+
+
+def carregar_caixa_externo() -> float:
+    """Reserva manual (dinheiro/contas fora do Pluggy), editável em
+    /caixa-externo -- guardada como meta única (não muda por mês)."""
+    with db.sessao() as conexao:
+        valor = db.obter_meta(conexao, "caixa_externo")
+    return float(valor) if valor else 0.0

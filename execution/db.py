@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS gastos_fixos (
     nome TEXT NOT NULL,
     forma TEXT NOT NULL,
     valor REAL NOT NULL,
+    categoria TEXT,
     PRIMARY KEY (mes, nome)
 );
 
@@ -76,6 +77,17 @@ def conectar() -> sqlite3.Connection:
 def inicializar():
     with conectar() as conexao:
         conexao.executescript(SCHEMA)
+        _migrar(conexao)
+
+
+def _migrar(conexao: sqlite3.Connection):
+    """Ajustes de schema em bancos que já existiam antes de uma coluna
+    nova ser criada -- `CREATE TABLE IF NOT EXISTS` não adiciona coluna em
+    tabela já existente, por isso o ALTER explícito aqui (idempotente:
+    ignora se a coluna já existe)."""
+    colunas = {row["name"] for row in conexao.execute("PRAGMA table_info(gastos_fixos)")}
+    if "categoria" not in colunas:
+        conexao.execute("ALTER TABLE gastos_fixos ADD COLUMN categoria TEXT")
 
 
 @contextmanager
@@ -86,6 +98,19 @@ def sessao():
         conexao.commit()
     finally:
         conexao.close()
+
+
+def obter_meta(conexao: sqlite3.Connection, chave: str) -> str | None:
+    row = conexao.execute("SELECT valor FROM meta WHERE chave = ?", (chave,)).fetchone()
+    return row["valor"] if row else None
+
+
+def definir_meta(conexao: sqlite3.Connection, chave: str, valor: str):
+    conexao.execute(
+        """INSERT INTO meta (chave, valor) VALUES (?, ?)
+           ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor""",
+        (chave, valor),
+    )
 
 
 if __name__ == "__main__":

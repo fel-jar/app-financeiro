@@ -11,8 +11,9 @@ from pathlib import Path
 from pluggy_client import from_env
 from mock_data import gerar_transacoes
 from email_source import buscar_transacoes as buscar_transacoes_email
-from gastos_fixos import GASTOS_FIXOS, valor_planejamento, total_fixo_mensal, total_fixo_pix, total_fixo_cartao
+from gastos_fixos import GASTOS_FIXOS, valor_planejamento, total_fixo_mensal, eh_transacao_do_fixo
 from normalizacao import traduzir_categoria, normalizar_transacoes_pluggy, CATEGORIA_RENDA_EXTRA
+from categorias_grandes import grande_categoria
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT_PATH = ROOT / "dashboard" / "index.html"
@@ -117,6 +118,23 @@ def _mes_seguinte(aaaa_mm: str, n: int) -> str:
     return f"{ano:04d}-{mes:02d}"
 
 
+def _fixas_do_mes(mes: str, gastos_fixos_por_mes: dict[str, list[dict]] | None) -> list[dict]:
+    """Itens fixos daquele mês (banco tem prioridade -- reflete edição via
+    /fixos/<mes>); sem banco, cai na lista estática de gastos_fixos.py."""
+    itens = gastos_fixos_por_mes.get(mes) if gastos_fixos_por_mes else None
+    if itens:
+        return itens
+    return [
+        {
+            "nome": item["nome"],
+            "forma": item.get("forma", "cartao"),
+            "valor": valor_planejamento(item),
+            "categoria": item.get("categoria", "Outros"),
+        }
+        for item in GASTOS_FIXOS
+    ]
+
+
 def construir_panorama_mensal(
     transacoes: list[dict],
     saldo: float | None,
@@ -124,31 +142,54 @@ def construir_panorama_mensal(
     meses_futuros: int = 5,
 ) -> list[dict]:
     """Monta o painel mês a mês: mês atual + próximos `meses_futuros`, cada
-    um com fatura de cartão (real no mês atual, projetada nos seguintes),
-    fixos, entrada prevista (salário + renda extra) e um saldo de caixa
-    projetado rodando de mês a mês, pra responder "dá pra cobrir?".
+    um com despesas divididas em Fixas (lista editável, ver /fixos/<mes>) e
+    Variáveis (gasto real), entrada prevista (salário + renda extra) e um
+    saldo de caixa projetado rodando de mês a mês, pra responder "dá pra
+    cobrir?".
 
-    A API guarda um "retrato" da parcela em cada fatura já fechada (ex.: uma
-    compra em 10x aparece uma vez por mês, incrementando installmentNumber) --
-    por isso a projeção parte só das parcelas que estão na fatura ATUAL
-    (`bill == mes_atual`), não de todo o histórico, senão cada retrato
-    passado geraria sua própria projeção e duplicaria os valores futuros.
-
-    No mês atual, os fixos pagos no cartão já estão dentro da fatura real
-    (não soma de novo). Nos meses futuros, a fatura só tem as parcelas já
-    parceladas -- os fixos recorrentes do cartão (Vivo, mercado etc., que
-    não são parcelamento) ainda vão ser cobrados, então entram por fora.
+    Variáveis do mês atual = toda despesa real do mês (Pix e cartão), MENOS
+    o que já bate com um item de Fixas (best-effort, ver
+    gastos_fixos.eh_transacao_do_fixo -- nem todo item tem regra confiável,
+    então algum fixo pode aparecer duplicado em Variáveis até ganhar uma
+    regra). Variáveis dos meses futuros = só parcelas de cartão já
+    comprometidas (não é estimativa nova -- a API guarda um "retrato" da
+    parcela em cada fatura já fechada, por isso a projeção parte só das
+    parcelas que estão na fatura ATUAL, `bill == mes_atual`, não de todo o
+    histórico, senão cada retrato passado geraria sua própria projeção e
+    duplicaria os valores futuros).
     """
     mes_atual = datetime.now().strftime("%Y-%m")
     salario_medio = salario_medio_recente(transacoes) or 0.0
     renda_extra_media = renda_extra_media_recente(transacoes) or 0.0
     entrada_prevista = salario_medio + renda_extra_media
 
-    fatura_atual = 0.0
-    detalhe_atual: list[dict] = []
-    projecao: dict = defaultdict(float)
-    detalhe_futuro: dict = defaultdict(list)
+    fixas_mes_atual = _fixas_do_mes(mes_atual, gastos_fixos_por_mes)
 
+    def eh_fixo(descricao: str, categoria_pt: str) -> bool:
+        return any(eh_transacao_do_fixo(f["nome"], descricao, categoria_pt) for f in fixas_mes_atual)
+
+    variaveis_atual: list[dict] = []
+    for t in transacoes_mes_atual(transacoes):
+        if t["amount"] >= 0:
+            continue
+        categoria_pt = traduzir_categoria(t.get("category") or "Outros")
+        descricao = t.get("description") or t.get("descriptionRaw") or "—"
+        if eh_fixo(descricao, categoria_pt):
+            continue
+        variaveis_atual.append({
+            "id": t.get("id"),
+            "descricao": descricao,
+            "categoria": categoria_pt,
+            "categoria_grande": grande_categoria(categoria_pt),
+            "forma": "cartao" if t.get("creditCardMetadata") else "pix",
+            "valor": abs(t["amount"]),
+            "parcela": None,
+        })
+
+    # Parcelas de cartão já comprometidas pros próximos meses (mesma lógica
+    # de projeção de sempre, só que agora alimenta "Variáveis" em vez de
+    # uma "fatura" separada).
+    detalhe_futuro: dict = defaultdict(list)
     for t in transacoes:
         meta = t.get("creditCardMetadata")
         if not meta or t.get("type") != "DEBIT":
@@ -156,22 +197,21 @@ def construir_panorama_mensal(
         atual_parc, total_parc, bill = meta.get("installmentNumber"), meta.get("totalInstallments"), meta.get("billForecastDate")
         if atual_parc is None or total_parc is None or bill != mes_atual:
             continue
-        valor = abs(t["amount"])
-        fatura_atual += valor
-        item_detalhe = {
-            "id": t.get("id"),
-            "descricao": t.get("description") or t.get("descriptionRaw") or "—",
-            "categoria": traduzir_categoria(t.get("category") or "Outros"),
-            "valor": valor,
-            "parcela": f"{atual_parc}/{total_parc}" if total_parc > 1 else None,
-        }
-        detalhe_atual.append(item_detalhe)
         restantes = total_parc - atual_parc
+        if restantes <= 0:
+            continue
+        valor = abs(t["amount"])
+        categoria_pt = traduzir_categoria(t.get("category") or "Outros")
+        descricao = t.get("description") or t.get("descriptionRaw") or "—"
         for i in range(1, min(restantes, meses_futuros) + 1):
             mes_futuro = _mes_seguinte(bill, i)
-            projecao[mes_futuro] += valor
             detalhe_futuro[mes_futuro].append({
-                **item_detalhe,
+                "id": t.get("id"),
+                "descricao": descricao,
+                "categoria": categoria_pt,
+                "categoria_grande": grande_categoria(categoria_pt),
+                "forma": "cartao",
+                "valor": valor,
                 "parcela": f"{atual_parc + i}/{total_parc}",
             })
 
@@ -180,38 +220,22 @@ def construir_panorama_mensal(
     linhas = []
     caixa_inicio = saldo
     for i, mes in enumerate(meses_ordenados):
-        # Valores editáveis (via /fixos/<mes>) têm prioridade; sem banco (ex.:
-        # ferramenta standalone puxando direto da Pluggy), cai na lista estática.
-        itens_mes = gastos_fixos_por_mes.get(mes) if gastos_fixos_por_mes else None
-        if itens_mes:
-            total_pix_mes = sum(it["valor"] for it in itens_mes if it["forma"] == "pix")
-            total_cartao_mes = sum(it["valor"] for it in itens_mes if it["forma"] == "cartao")
-        else:
-            total_pix_mes = total_fixo_pix()
-            total_cartao_mes = total_fixo_cartao()
+        fixas_itens = _fixas_do_mes(mes, gastos_fixos_por_mes)
+        fixas_total = sum(it["valor"] for it in fixas_itens)
 
-        if i == 0:
-            fatura_mes = fatura_atual  # já inclui os fixos do cartão reais deste ciclo
-            fixos_cartao_recorrente = total_cartao_mes  # só exibido, não somado nesse mês
-            detalhe = detalhe_atual
-        else:
-            fatura_mes = projecao.get(mes, 0.0) + total_cartao_mes  # parcelas + recorrente assumido
-            fixos_cartao_recorrente = total_cartao_mes
-            detalhe = detalhe_futuro.get(mes, [])
+        variaveis_itens = variaveis_atual if i == 0 else detalhe_futuro.get(mes, [])
+        variaveis_total = sum(it["valor"] for it in variaveis_itens)
 
-        # Total necessário = fixos no Pix + fatura do cartão. O fixo recorrente
-        # do cartão NÃO entra separado -- já está embutido na fatura (real no
-        # mês atual, projetado por fora nos futuros); somar de novo duplicaria.
-        necessario = fatura_mes + total_pix_mes
+        necessario = fixas_total + variaveis_total
         saldo_final = None if caixa_inicio is None else caixa_inicio + entrada_prevista - necessario
         cobre = None if caixa_inicio is None else (caixa_inicio + entrada_prevista) >= necessario
 
         linhas.append({
             "mes": mes,
-            "fatura": fatura_mes,
-            "fixos_cartao_recorrente": fixos_cartao_recorrente,
-            "fixos_pix": total_pix_mes,
-            "fixos_itens": itens_mes,
+            "fixas_itens": fixas_itens,
+            "fixas_total": fixas_total,
+            "variaveis_itens": sorted(variaveis_itens, key=lambda d: -d["valor"]),
+            "variaveis_total": variaveis_total,
             "necessario": necessario,
             "salario_medio": salario_medio,
             "renda_extra_media": renda_extra_media,
@@ -219,37 +243,10 @@ def construir_panorama_mensal(
             "caixa_inicio": caixa_inicio,
             "saldo_final": saldo_final,
             "cobre": cobre,
-            "detalhe": sorted(detalhe, key=lambda d: -d["valor"]),
         })
         caixa_inicio = saldo_final
 
     return linhas
-
-
-def _para_detalhe(transacoes_like: list[dict]) -> list[dict]:
-    """Converte transações cruas pro formato usado nas seções expansíveis
-    (descricao/categoria/valor/parcela)."""
-    return [{
-        "id": t.get("id"),
-        "descricao": t.get("description") or t.get("descriptionRaw") or "—",
-        "categoria": traduzir_categoria(t.get("category") or "Outros"),
-        "valor": abs(t["amount"]),
-        "parcela": None,
-    } for t in transacoes_like]
-
-
-def _categorias_do_detalhe(detalhe: list[dict]) -> list[tuple[str, float]]:
-    agregados: dict = defaultdict(float)
-    for d in detalhe:
-        agregados[d["categoria"]] += d["valor"]
-    return sorted(agregados.items(), key=lambda kv: -kv[1])
-
-
-def _agrupar_por_categoria(detalhe: list[dict]) -> dict:
-    agrupado: dict = defaultdict(list)
-    for d in detalhe:
-        agrupado[d["categoria"]].append(d)
-    return dict(agrupado)
 
 
 def fmt_brl(valor: float) -> str:
@@ -262,32 +259,38 @@ def fmt_brl_ou_indisponivel(valor: float | None) -> str:
     return "Indisponível" if valor is None else fmt_brl(valor)
 
 
-def render_categorias_expansivel(detalhe: list[dict]) -> str:
-    """Uma linha por categoria (label + barra + valor), cada uma um
-    <details> que abre pra listar os lançamentos daquela categoria."""
-    categorias_valores = _categorias_do_detalhe(detalhe)
-    if not categorias_valores:
+def render_classe_por_categoria(itens: list[dict], chave_nome: str) -> str:
+    """Agrupa itens (fixas ou variáveis) por grande categoria e renderiza
+    cada grupo como <details> expansível -- mesmo padrão visual de
+    render_categorias_expansivel, mas agrupando por categoria_grande e
+    mostrando a forma de pagamento (pix/cartão) ao lado de cada item."""
+    if not itens:
         return '<p class="subtitulo">Nenhum lançamento.</p>'
-    por_categoria = _agrupar_por_categoria(detalhe)
-    max_valor = max(v for _, v in categorias_valores) or 1
+
+    por_grande: dict = defaultdict(list)
+    for it in itens:
+        por_grande[it.get("categoria_grande") or it.get("categoria") or "Outros"].append(it)
+    totais = {grande: sum(i["valor"] for i in lst) for grande, lst in por_grande.items()}
+    max_valor = max(totais.values()) or 1
 
     linhas = ""
-    for cat, valor in categorias_valores:
-        largura = round(valor / max_valor * 100, 1)
-        itens = sorted(por_categoria[cat], key=lambda i: -i["valor"])
-        linhas_item = "".join(
-            f"""<tr><td>{i['descricao']}{f" ({i['parcela']})" if i.get('parcela') else ""}"""
-            f"""{f' <a class="editar-link" href="/transacao/{i["id"]}/editar">✎</a>' if i.get('id') else ""}</td>"""
-            f"""<td class="num">{fmt_brl(i['valor'])}</td></tr>"""
-            for i in itens
-        )
+    for grande, total in sorted(totais.items(), key=lambda kv: -kv[1]):
+        largura = round(total / max_valor * 100, 1)
+        itens_grupo = sorted(por_grande[grande], key=lambda i: -i["valor"])
+        linhas_item = ""
+        for i in itens_grupo:
+            nome = i.get(chave_nome, "—")
+            forma_txt = " · Pix" if i.get("forma") == "pix" else " · Cartão" if i.get("forma") == "cartao" else ""
+            parcela_txt = f" ({i['parcela']})" if i.get("parcela") else ""
+            editar = f' <a class="editar-link" href="/transacao/{i["id"]}/editar">✎</a>' if i.get("id") else ""
+            linhas_item += f"""<tr><td>{nome}{forma_txt}{parcela_txt}{editar}</td><td class="num">{fmt_brl(i['valor'])}</td></tr>"""
         linhas += f"""
         <details class="cat-detalhe">
           <summary>
             <div class="linha-cat">
-              <span class="cat-label">{cat}</span>
+              <span class="cat-label">{grande}</span>
               <div class="cat-track"><div class="cat-barra" style="width:{largura}%"></div></div>
-              <span class="cat-valor">{fmt_brl(valor)}</span>
+              <span class="cat-valor">{fmt_brl(total)}</span>
             </div>
           </summary>
           <table class="tabela-detalhe"><tbody>{linhas_item}</tbody></table>
@@ -295,65 +298,23 @@ def render_categorias_expansivel(detalhe: list[dict]) -> str:
     return linhas
 
 
-def render_fixos_detalhe(
-    titulo: str, forma: str, itens_mes: list[dict] | None = None, mes: str | None = None, card: bool = False
+def render_classe_expansivel(
+    titulo: str, itens: list[dict], chave_nome: str, total: float, mes: str | None = None
 ) -> str:
-    """Lista expansível dos gastos fixos de uma forma (pix/cartao). `card`
-    controla se vem embrulhado como card de página (uso solo) ou como
-    details simples pra encaixar dentro de outro card (painel do mês).
-
-    `itens_mes` (vindo do banco, editável em /fixos/<mes>) tem prioridade
-    sobre a lista estática -- sem ele (ferramenta standalone sem banco),
-    cai nos valores padrão de gastos_fixos.py."""
-    if itens_mes is not None:
-        itens = [i for i in itens_mes if i["forma"] == forma]
-        linhas_valores = [(i["nome"], i["valor"], "") for i in itens]
-    else:
-        itens_padrao = [i for i in GASTOS_FIXOS if i.get("forma") == forma]
-        linhas_valores = []
-        for item in itens_padrao:
-            faixa = f" (faixa {fmt_brl(item['valor_min'])}–{fmt_brl(item['valor_max'])})" if "valor_min" in item else ""
-            linhas_valores.append((item["nome"], valor_planejamento(item), faixa))
-
-    total = sum(v for _, v, _ in linhas_valores)
-    linhas = "".join(
-        f"""<tr><td>{nome}{faixa}</td><td class="num">{fmt_brl(valor)}</td></tr>"""
-        for nome, valor, faixa in linhas_valores
-    )
+    """Card "Fixas" ou "Variáveis" do painel do mês: total no cabeçalho,
+    corpo agrupado por grande categoria. `mes` (só em Fixas) acrescenta o
+    link pra /fixos/<mes>, onde os valores são editáveis."""
+    corpo = render_classe_por_categoria(itens, chave_nome)
     editar_link = f' <a class="editar-link" href="/fixos/{mes}">✎ editar</a>' if mes else ""
-    classe = "card" if card else "detalhe-fatura"
     return f"""
-  <details class="{classe}">
+  <details class="detalhe-fatura" open>
     <summary>
       <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
         <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">{titulo}{editar_link}</span>
         <span class="cat-valor" style="font-size:14px;">{fmt_brl(total)}</span>
       </div>
     </summary>
-    <table class="tabela-detalhe">
-      <tbody>{linhas}
-        <tr><td><strong>Total</strong></td><td class="num"><strong>{fmt_brl(total)}</strong></td></tr>
-      </tbody>
-    </table>
-  </details>"""
-
-
-def render_entrada_detalhe(linha: dict) -> str:
-    return f"""
-  <details class="detalhe-fatura">
-    <summary>
-      <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
-        <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Entrada prevista</span>
-        <span class="cat-valor" style="font-size:14px;">{fmt_brl(linha['entrada'])}</span>
-      </div>
-    </summary>
-    <table class="tabela-detalhe">
-      <tbody>
-        <tr><td>Salário médio (últimos meses fechados)</td><td class="num">{fmt_brl(linha['salario_medio'])}</td></tr>
-        <tr><td>Renda extra média (assessoria)</td><td class="num">{fmt_brl(linha['renda_extra_media'])}</td></tr>
-        <tr><td><strong>Total</strong></td><td class="num"><strong>{fmt_brl(linha['entrada'])}</strong></td></tr>
-      </tbody>
-    </table>
+    <div style="margin-top:10px;">{corpo}</div>
   </details>"""
 
 
@@ -365,12 +326,10 @@ def render_mes_panorama(linha: dict, aberto: bool) -> str:
         badge_classe = "good" if cobre else "critical"
         badge = f'<span class="badge {badge_classe}">{badge_texto}</span>'
 
-    detalhe_html = render_categorias_expansivel(linha["detalhe"])
     saldo_final_classe = "good" if (linha["saldo_final"] or 0) >= 0 else "critical"
     open_attr = " open" if aberto else ""
-    fixos_pix_html = render_fixos_detalhe("Fixos no Pix", "pix", linha.get("fixos_itens"), mes=linha["mes"])
-    fixos_cartao_html = render_fixos_detalhe("Fixos no cartão recorrente", "cartao", linha.get("fixos_itens"), mes=linha["mes"])
-    entrada_html = render_entrada_detalhe(linha)
+    fixas_html = render_classe_expansivel("Fixas", linha["fixas_itens"], "nome", linha["fixas_total"], mes=linha["mes"])
+    variaveis_html = render_classe_expansivel("Variáveis", linha["variaveis_itens"], "descricao", linha["variaveis_total"])
 
     return f"""
   <details class="card mes-panorama"{open_attr}>
@@ -381,27 +340,21 @@ def render_mes_panorama(linha: dict, aberto: bool) -> str:
     <div class="tiles" style="margin-top:14px;">
       <div class="tile"><div class="label">Total necessário</div><div class="valor">{fmt_brl(linha['necessario'])}</div></div>
       <div class="tile"><div class="label">Caixa no início do mês</div><div class="valor">{fmt_brl_ou_indisponivel(linha['caixa_inicio'])}</div></div>
+      <div class="tile"><div class="label">Entrada prevista</div><div class="valor">{fmt_brl(linha['entrada'])}</div></div>
       <div class="tile"><div class="label">Saldo projetado no fim do mês</div><div class="valor {saldo_final_classe}">{fmt_brl_ou_indisponivel(linha['saldo_final'])}</div></div>
     </div>
     <div style="margin-top:14px;">
-      {fixos_pix_html}
-      {fixos_cartao_html}
-      <details class="detalhe-fatura">
-        <summary>
-          <div class="linha-cat" style="grid-template-columns: 1fr 90px;">
-            <span class="cat-label" style="font-size:14px;font-weight:600;color:var(--text-primary);">Fatura do cartão</span>
-            <span class="cat-valor" style="font-size:14px;">{fmt_brl(linha['fatura'])}</span>
-          </div>
-        </summary>
-        <div style="margin-top:10px;">{detalhe_html}</div>
-      </details>
-      {entrada_html}
+      {fixas_html}
+      {variaveis_html}
     </div>
   </details>"""
 
 
 def montar_html(
-    transacoes: list[dict], saldo: float | None, gastos_fixos_por_mes: dict[str, list[dict]] | None = None
+    transacoes: list[dict],
+    saldo: float | None,
+    gastos_fixos_por_mes: dict[str, list[dict]] | None = None,
+    caixa_externo: float = 0.0,
 ) -> str:
     meses = agregar_por_mes(transacoes)
     categorias = agregar_categorias_despesa(transacoes)
@@ -409,7 +362,11 @@ def montar_html(
     total_despesa = sum(v["despesa"] for v in meses.values())
     resultado = total_receita - total_despesa
 
-    panorama = construir_panorama_mensal(transacoes, saldo, gastos_fixos_por_mes)
+    # Reserva manual (contas fora do Pluggy, ver /caixa-externo) soma no
+    # caixa geral E no "Caixa no início do mês" de cada card mensal.
+    saldo_com_externo = None if saldo is None else saldo + caixa_externo
+
+    panorama = construir_panorama_mensal(transacoes, saldo_com_externo, gastos_fixos_por_mes)
     mes_atual = datetime.now().strftime("%Y-%m")
     itens_mes_atual = gastos_fixos_por_mes.get(mes_atual) if gastos_fixos_por_mes else None
     total_fixo = sum(i["valor"] for i in itens_mes_atual) if itens_mes_atual else total_fixo_mensal()
@@ -424,14 +381,6 @@ def montar_html(
 
     gasto_cartao_mes = gasto_cartao_por_mes(transacoes)
     max_gasto_cartao_mes = max(gasto_cartao_mes.values(), default=1) or 1
-
-    mes_atual_txs = transacoes_mes_atual(transacoes)
-    compras_mes = sorted(
-        (t for t in mes_atual_txs if t["amount"] < 0),
-        key=lambda t: t["date"], reverse=True,
-    )
-    total_gasto_mes = sum(abs(t["amount"]) for t in compras_mes)
-    detalhe_mes_atual = _para_detalhe(compras_mes)
 
     max_valor_mes = max(
         (max(v["receita"], v["despesa"]) for v in meses.values()), default=1
@@ -476,8 +425,6 @@ def montar_html(
           </div>
           <span class="cat-valor">{fmt_brl(valor)}</span>
         </div>"""
-
-    categorias_mes_html = render_categorias_expansivel(detalhe_mes_atual)
 
     barras_gasto_cartao = ""
     for mes, valor in gasto_cartao_mes.items():
@@ -612,12 +559,13 @@ def montar_html(
     </div>
     <div style="display:flex; align-items:center; gap:14px;">
       <a href="/orcamento" class="editar-link" style="font-size:13px;">Orçamento por categoria</a>
+      <a href="/caixa-externo" class="editar-link" style="font-size:13px;">Caixa externo</a>
       <button id="toggle-tema" onclick="alternarTema()">Alternar tema</button>
     </div>
   </header>
 
   <div class="tiles">
-    <div class="tile"><div class="label">Caixa disponível</div><div class="valor">{fmt_brl_ou_indisponivel(saldo)}</div></div>
+    <div class="tile"><div class="label">Caixa disponível</div><div class="valor">{fmt_brl_ou_indisponivel(saldo_com_externo)}</div></div>
     <div class="tile"><div class="label">Salário médio</div><div class="valor">{fmt_brl_ou_indisponivel(salario_medio)}</div></div>
     <div class="tile"><div class="label">Renda extra média</div><div class="valor">{fmt_brl_ou_indisponivel(renda_extra_media)}</div></div>
     <div class="tile"><div class="label">Sobra com renda extra (antes do variável)</div><div class="valor {sobra_fixa_com_extra_classe}">{fmt_brl_ou_indisponivel(sobra_fixa_com_extra)}</div></div>
@@ -643,12 +591,6 @@ def montar_html(
     </div>
     <div class="chart-mensal">{barras_gasto_cartao}
     </div>
-  </div>
-
-  <div class="card">
-    <h2>Todos os gastos do mês atual, por categoria</h2>
-    <div class="subtitulo" style="margin-bottom:12px;">Inclui Pix e cartão. Total gasto até agora neste mês: {fmt_brl(total_gasto_mes)}</div>
-    {categorias_mes_html}
   </div>
 
   <details class="card">
