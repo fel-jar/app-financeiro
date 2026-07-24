@@ -51,6 +51,27 @@ FONTE_RENDA_EXTRA = "PERMAX CONSULTORIA"
 CATEGORIA_RENDA_EXTRA = "Renda extra"
 
 
+def normalizar_transacoes_de_contas(cliente, contas: list[dict]) -> list[dict]:
+    """Mesma normalização de sinal/filtro usada por normalizar_transacoes_pluggy,
+    mas recebendo a lista de contas já filtrada -- extraído pra reaproveitar
+    em sincronizações parciais (ex.: só o cartão de um item de terceiro, ver
+    sync.py:sincronizar_cartao_apenas_credito)."""
+    transacoes = []
+    for conta in contas:
+        for t in cliente.list_transactions(conta["id"]):
+            categoria = t.get("category") or ""
+            if categoria in CATEGORIAS_MOVIMENTACAO_INTERNA:
+                descricao = (t.get("description") or "").upper()
+                if categoria == "Transfer - PIX" and t.get("type") == "CREDIT" and FONTE_RENDA_EXTRA in descricao:
+                    t["category"] = CATEGORIA_RENDA_EXTRA
+                else:
+                    continue
+            if conta["type"] == "CREDIT":
+                t["amount"] = -abs(t["amount"]) if t.get("type") == "DEBIT" else abs(t["amount"])
+            transacoes.append(t)
+    return transacoes
+
+
 def normalizar_transacoes_pluggy(cliente, item_id: str) -> tuple[list[dict], float | None]:
     """Busca e normaliza transações de todas as contas do item.
 
@@ -72,18 +93,5 @@ def normalizar_transacoes_pluggy(cliente, item_id: str) -> tuple[list[dict], flo
     contas = cliente.list_accounts(item_id)
     contas_banco = [c for c in contas if c["type"] == "BANK"]
     saldo = sum(c["balance"] for c in contas_banco) if contas_banco else None
-
-    transacoes = []
-    for conta in contas:
-        for t in cliente.list_transactions(conta["id"]):
-            categoria = t.get("category") or ""
-            if categoria in CATEGORIAS_MOVIMENTACAO_INTERNA:
-                descricao = (t.get("description") or "").upper()
-                if categoria == "Transfer - PIX" and t.get("type") == "CREDIT" and FONTE_RENDA_EXTRA in descricao:
-                    t["category"] = CATEGORIA_RENDA_EXTRA
-                else:
-                    continue
-            if conta["type"] == "CREDIT":
-                t["amount"] = -abs(t["amount"]) if t.get("type") == "DEBIT" else abs(t["amount"])
-            transacoes.append(t)
+    transacoes = normalizar_transacoes_de_contas(cliente, contas)
     return transacoes, saldo

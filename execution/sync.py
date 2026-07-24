@@ -15,7 +15,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 from pluggy_client import from_env
-from normalizacao import normalizar_transacoes_pluggy
+from normalizacao import normalizar_transacoes_pluggy, normalizar_transacoes_de_contas
 from gastos_fixos import GASTOS_FIXOS, valor_planejamento
 import db
 
@@ -34,11 +34,7 @@ def _mes_seguinte(aaaa_mm: str, n: int) -> str:
     return f"{ano:04d}-{mes:02d}"
 
 
-def sincronizar_transacoes_e_contas(conexao, cliente, item_id: str) -> list[dict]:
-    transacoes, _ = normalizar_transacoes_pluggy(cliente, item_id)
-    agora = datetime.now().isoformat()
-
-    contas = cliente.list_accounts(item_id)
+def _gravar_contas(conexao, contas: list[dict], agora: str):
     for conta in contas:
         conexao.execute(
             """INSERT INTO contas (account_id, account_type, account_name, balance, synced_at)
@@ -49,6 +45,8 @@ def sincronizar_transacoes_e_contas(conexao, cliente, item_id: str) -> list[dict
             (conta["id"], conta["type"], conta.get("name"), conta.get("balance"), agora),
         )
 
+
+def _gravar_transacoes(conexao, transacoes: list[dict], tipo_conta_por_id: dict, agora: str):
     for t in transacoes:
         meta = t.get("creditCardMetadata") or {}
         conexao.execute(
@@ -64,21 +62,41 @@ def sincronizar_transacoes_e_contas(conexao, cliente, item_id: str) -> list[dict
                  installment_total=excluded.installment_total,
                  bill_forecast_date=excluded.bill_forecast_date, synced_at=excluded.synced_at""",
             (
-                t["id"], t["accountId"], _tipo_conta(t, contas), t["date"],
+                t["id"], t["accountId"], tipo_conta_por_id.get(t["accountId"], "DESCONHECIDO"), t["date"],
                 t.get("description") or t.get("descriptionRaw"), t.get("category"),
                 t["amount"], t.get("type"),
                 meta.get("installmentNumber"), meta.get("totalInstallments"),
                 meta.get("billForecastDate"), agora,
             ),
         )
+
+
+def sincronizar_transacoes_e_contas(conexao, cliente, item_id: str) -> list[dict]:
+    transacoes, _ = normalizar_transacoes_pluggy(cliente, item_id)
+    agora = datetime.now().isoformat()
+
+    contas = cliente.list_accounts(item_id)
+    _gravar_contas(conexao, contas, agora)
+    _gravar_transacoes(conexao, transacoes, {c["id"]: c["type"] for c in contas}, agora)
     return transacoes
 
 
-def _tipo_conta(transacao: dict, contas: list[dict]) -> str:
-    for c in contas:
-        if c["id"] == transacao["accountId"]:
-            return c["type"]
-    return "DESCONHECIDO"
+def sincronizar_cartao_apenas_credito(conexao, cliente, item_id: str) -> list[dict]:
+    """Sincroniza SÓ as contas CREDIT de um item -- pensado pra conexão da
+    esposa (2ª titular da MESMA conta corrente do usuário): a conta BANK
+    dela no Pluggy espelha o saldo que o item principal já conta, então
+    incluí-la dobraria o "Caixa disponível"; o cartão Elo dela é a única
+    coisa nova que esse item traz (decisão do usuário em 2026-07-25)."""
+    contas = cliente.list_accounts(item_id)
+    contas_credito = [c for c in contas if c["type"] == "CREDIT"]
+    if not contas_credito:
+        return []
+
+    transacoes = normalizar_transacoes_de_contas(cliente, contas_credito)
+    agora = datetime.now().isoformat()
+    _gravar_contas(conexao, contas_credito, agora)
+    _gravar_transacoes(conexao, transacoes, {c["id"]: c["type"] for c in contas_credito}, agora)
+    return transacoes
 
 
 def seed_gastos_fixos(conexao):
@@ -136,6 +154,11 @@ def main():
 
     with db.sessao() as conexao:
         transacoes = sincronizar_transacoes_e_contas(conexao, cliente, item_id)
+
+        item_id_esposa = os.getenv("PLUGGY_ITEM_ID_ESPOSA")
+        if item_id_esposa:
+            transacoes += sincronizar_cartao_apenas_credito(conexao, cliente, item_id_esposa)
+
         seed_gastos_fixos(conexao)
         seed_orcamento_categoria(conexao, transacoes)
 
