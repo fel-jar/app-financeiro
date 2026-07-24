@@ -83,11 +83,21 @@ def inicializar():
 def _migrar(conexao: sqlite3.Connection):
     """Ajustes de schema em bancos que já existiam antes de uma coluna
     nova ser criada -- `CREATE TABLE IF NOT EXISTS` não adiciona coluna em
-    tabela já existente, por isso o ALTER explícito aqui (idempotente:
-    ignora se a coluna já existe)."""
+    tabela já existente, por isso o ALTER explícito aqui.
+
+    O `try/except` (não só o `PRAGMA table_info` antes) é necessário porque
+    múltiplos processos chamam inicializar() ao mesmo tempo no primeiro
+    boot (os workers do gunicorn + o scheduler, cada um importando app.py
+    de forma independente) -- sem isso, dois processos podem checar "coluna
+    não existe" ao mesmo tempo e um deles quebra com "duplicate column
+    name" ao tentar o ALTER (visto em produção em 2026-07-24)."""
     colunas = {row["name"] for row in conexao.execute("PRAGMA table_info(gastos_fixos)")}
     if "categoria" not in colunas:
-        conexao.execute("ALTER TABLE gastos_fixos ADD COLUMN categoria TEXT")
+        try:
+            conexao.execute("ALTER TABLE gastos_fixos ADD COLUMN categoria TEXT")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e):
+                raise
 
 
 @contextmanager
