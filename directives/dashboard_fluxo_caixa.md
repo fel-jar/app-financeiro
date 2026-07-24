@@ -526,3 +526,86 @@ do restart, confirmado `issuer=Let's Encrypt` real via `openssl s_client`.
    `/orcamento` quando o usuário quiser.
 3. Sem testes automatizados no projeto — o workflow do GitHub Actions não
    tem job de teste (diferente do garmin-hub do PerMax).
+
+## Status atual (2026-07-24) — Painel do mês redesenhado: Fixas x Variáveis
+
+Pedido do usuário: em vez de "Fixos no Pix / Fixos no cartão recorrente /
+Fatura do cartão" (3 seções que meio que se sobrepunham), dividir TODA
+despesa do mês em duas classes -- **Fixas** (contas certas, editável em
+`/fixos/<mes>`) e **Variáveis** (gasto real do mês, ou parcelas já
+comprometidas nos meses futuros) -- cada uma agrupada em "grandes
+categorias" (Mercado, Combustível, Casa, Família e Saúde, Assinaturas,
+Lazer, Transporte, Outros) com a forma de pagamento (pix/cartão) ao lado
+de cada item. Esboço aprovado pelo usuário antes de implementar (ver
+transcrição da conversa em 2026-07-24).
+
+### Decisões de design (perguntadas ao usuário antes de implementar)
+- **Mercado e Combustível saíram de Fixas** -- eram itens com faixa de
+  valor (`valor_min`/`valor_max`) que na prática só serviam de estimativa;
+  viraram Variáveis puras, com o gasto real do mês. Ver `gastos_fixos.py`.
+- **Variáveis nos meses futuros = só parcelas já comprometidas**, não uma
+  média estimada -- é literalmente o `detalhe_futuro` que já existia (uma
+  compra parcelada feita hoje continua aparecendo nos meses seguintes até
+  quitar). Sem estimativa nova pro que ainda não aconteceu.
+- **"Total necessário" virou soma direta de Fixas + Variáveis** (antes
+  tinha uma ressalva pra não somar o fixo do cartão de novo, porque ele já
+  estava embutido na "fatura"). Com a nova separação, não tem mais essa
+  sobreposição -- Fixas é a lista assumida, Variáveis é o gasto real que
+  não é um dos itens de Fixas (ver dedup abaixo).
+- **"Entrada prevista" virou o 4º tile do topo do card do mês** (era uma
+  seção separada no rodapé) -- ordem: Total necessário, Caixa no início do
+  mês, Entrada prevista, Saldo projetado no fim do mês.
+- **"Caixa externo"** (`/caixa-externo`, novo): reserva manual única (não
+  por mês) pra dinheiro/contas fora do Pluggy, guardada na tabela `meta`
+  (chave `caixa_externo`). Soma nos DOIS lugares: tile "Caixa disponível"
+  do topo E "Caixa no início do mês" de cada card mensal (decisão do
+  usuário -- ele quis que entrasse também no cálculo de "cobre/não cobre"
+  mês a mês, não só no resumo geral).
+- Card "Todos os gastos do mês atual, por categoria" (rodapé da página)
+  **removido** -- ficava redundante com o painel do mês atual, que já abre
+  expandido.
+
+### Dedup Fixas x Variáveis -- best-effort, não é garantido
+Item fixo pago no cartão (Vivo, Escolinha do Guel etc.) também aparece
+como transação real no extrato -- sem alguma exclusão, ele contaria 2x
+(uma vez em Fixas com o valor assumido, outra em Variáveis com o valor
+real). Tentei achar um jeito confiável de casar "nome do item fixo" com
+"transação real" e não existe um único critério que funcione pra todos:
+- Nome do item (ex.: "Escolinha do Guel") quase nunca bate literalmente
+  com a descrição real da transação (ex.: "BMB *No Jardim").
+- Categoria da Pluggy também não é exclusiva -- "Digital services" cobre
+  tanto YouTube/Spotify (fixos) quanto Canva/Amazon Prime/Kiwify (variáveis
+  reais, nem estavam na lista de fixos antes).
+
+Solução adotada em `gastos_fixos.EXCLUSAO_VARIAVEIS` /
+`eh_transacao_do_fixo()`: regra por item, palavra-chave OU categoria
+exclusiva, só pros itens onde dava pra confirmar com segurança usando os
+dados reais de julho/26:
+| Item fixo | Regra | Confiança |
+|---|---|---|
+| Vivo, Tim, YouTube Premium, Spotify | palavra-chave na descrição | alta (nome do serviço aparece literal) |
+| Escolinha do Guel | categoria = "Escolinha/Creche" (exclusiva) | alta |
+| Smiles | palavra-chave "smiles club" | média |
+| Faculdade, e todos os fixos em Pix (Psicóloga, Financiamento carro, Internet, Condomínio, Luz, PNR, IR) | **sem regra** | -- |
+
+Testado em 2026-07-24 contra as transações reais de julho/26: zero
+vazamento pros itens com regra (Vivo/Escolinha/YouTube/Spotify não
+aparecem em Variáveis), e a soma de cada grande categoria em Fixas bateu
+exatamente com o esperado. Os fixos em Pix não apareceram nenhuma vez como
+transação real BANK no mês testado (só um lançamento avulso de tarifa de
+cartão) -- pode ser que sejam pagos por boleto/débito automático que ainda
+não tinha caído nesse ciclo, ou que caiam perto do fechamento. **Se algum
+dia um fixo em Pix (ou Faculdade) aparecer como transação real e
+duplicar em Variáveis, a correção é adicionar uma regra nova em
+`EXCLUSAO_VARIAVEIS`** -- não é pra silenciosamente aceitar o "Total
+necessário" inflado, é pra voltar aqui e ajustar.
+
+### Migração de schema
+`gastos_fixos` ganhou a coluna `categoria` (grande categoria, pra
+agrupamento visual de Fixas). Bancos que já existiam antes disso levam a
+coluna via `ALTER TABLE` idempotente dentro de `db.inicializar()` (ver
+`db._migrar()`), e o valor é preenchido (backfill, sem sobrescrever
+`valor`) dentro de `sync.seed_gastos_fixos()` toda vez que roda. As linhas
+de `Mercado`/`Combustível` já semeadas em meses anteriores foram apagadas
+manualmente (`DELETE FROM gastos_fixos WHERE nome IN (...)`), tanto local
+quanto na VPS -- não vão voltar porque saíram de `GASTOS_FIXOS`.
