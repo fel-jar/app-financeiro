@@ -565,40 +565,70 @@ transcrição da conversa em 2026-07-24).
   **removido** -- ficava redundante com o painel do mês atual, que já abre
   expandido.
 
-### Dedup Fixas x Variáveis -- best-effort, não é garantido
-Item fixo pago no cartão (Vivo, Escolinha do Guel etc.) também aparece
-como transação real no extrato -- sem alguma exclusão, ele contaria 2x
-(uma vez em Fixas com o valor assumido, outra em Variáveis com o valor
-real). Tentei achar um jeito confiável de casar "nome do item fixo" com
-"transação real" e não existe um único critério que funcione pra todos:
-- Nome do item (ex.: "Escolinha do Guel") quase nunca bate literalmente
-  com a descrição real da transação (ex.: "BMB *No Jardim").
-- Categoria da Pluggy também não é exclusiva -- "Digital services" cobre
-  tanto YouTube/Spotify (fixos) quanto Canva/Amazon Prime/Kiwify (variáveis
-  reais, nem estavam na lista de fixos antes).
+### Dedup Fixas x Variáveis -- resolvido com vínculo exato (2026-07-25)
+A abordagem antiga (`EXCLUSAO_VARIAVEIS` com palavra-chave/categoria,
+best-effort) foi **removida**. Motivo: só existia pra cobrir os itens de
+cartão digitados à mão na lista estática, e o usuário pediu pra tirar
+esse padrão inteiro (ver "Gasto fixo no cartão" abaixo) -- sem mais itens
+de cartão "chutados", não sobrou nenhum caso que precisasse de heurística.
 
-Solução adotada em `gastos_fixos.EXCLUSAO_VARIAVEIS` /
-`eh_transacao_do_fixo()`: regra por item, palavra-chave OU categoria
-exclusiva, só pros itens onde dava pra confirmar com segurança usando os
-dados reais de julho/26:
-| Item fixo | Regra | Confiança |
-|---|---|---|
-| Vivo, Tim, YouTube Premium, Spotify | palavra-chave na descrição | alta (nome do serviço aparece literal) |
-| Escolinha do Guel | categoria = "Escolinha/Creche" (exclusiva) | alta |
-| Smiles | palavra-chave "smiles club" | média |
-| Faculdade, e todos os fixos em Pix (Psicóloga, Financiamento carro, Internet, Condomínio, Luz, PNR, IR) | **sem regra** | -- |
+Mecanismo atual: `gastos_fixos.transacao_id_origem` guarda o ID real da
+transação Pluggy quando o item foi criado via conversão (ver abaixo).
+`construir_panorama_mensal()` monta um `set` desses IDs pro mês atual e
+exclui de Variáveis por igualdade de ID -- exato, não por nome/categoria.
+`GASTOS_FIXOS` (lista estática) só tem itens em **Pix** agora (nunca
+apareceram como transação real isolada nos dados testados).
 
-Testado em 2026-07-24 contra as transações reais de julho/26: zero
-vazamento pros itens com regra (Vivo/Escolinha/YouTube/Spotify não
-aparecem em Variáveis), e a soma de cada grande categoria em Fixas bateu
-exatamente com o esperado. Os fixos em Pix não apareceram nenhuma vez como
-transação real BANK no mês testado (só um lançamento avulso de tarifa de
-cartão) -- pode ser que sejam pagos por boleto/débito automático que ainda
-não tinha caído nesse ciclo, ou que caiam perto do fechamento. **Se algum
-dia um fixo em Pix (ou Faculdade) aparecer como transação real e
-duplicar em Variáveis, a correção é adicionar uma regra nova em
-`EXCLUSAO_VARIAVEIS`** -- não é pra silenciosamente aceitar o "Total
-necessário" inflado, é pra voltar aqui e ajustar.
+### Gasto fixo no cartão: só via conversão, nunca digitado à mão (2026-07-25)
+Usuário reportou bug: um item de Fixas convertido de uma cobrança real do
+cartão (via "→ fixo") deixava editar o **valor** e **apagar** a linha --
+o valor ficava desalinhado da fatura real, e apagar fazia o gasto real
+sumir da projeção sem motivo. Consertado:
+- `/fixos/<mes>`: linhas com `forma == "cartao"` mostram o valor travado
+  (🔒, só leitura) e **sem checkbox de remover**. Categoria continua
+  editável. Bloqueado nos dois lados (tela E backend -- testado forçando
+  POST direto tentando burlar).
+- "Adicionar gasto fixo" só aceita Pix -- gasto de cartão só entra pela
+  conversão (`/transacao/<id>/tornar-fixo`, botão "→ fixo" em cada item
+  de Variáveis do mês atual), que semeia `MESES_SEED_FIXOS` (6) meses à
+  frente com o `transacao_id_origem` preenchido.
+- **Desfazer**: botão "→ variável" no lugar do checkbox de remover pra
+  linhas de cartão. Apaga só a linha de `gastos_fixos` daquele mês
+  (nunca a transação em si) -- o item volta a aparecer em Variáveis
+  naturalmente porque some do `set` de IDs excluídos. É por mês (mesma
+  granularidade de todo o resto); pra desfazer em vários meses, repetir
+  em cada `/fixos/<mes>`.
+- Lista estática `GASTOS_FIXOS` limpa de itens de cartão (Vivo, Faculdade,
+  Escolinha do Guel, Tim, YouTube Premium, Spotify, Smiles) -- as 42
+  linhas já seedadas desses itens foram apagadas do banco (local + VPS).
+  Eles voltam a aparecer em Variáveis pra classificação manual via "→
+  fixo" com vínculo exato.
+
+### Gasto variável manual em Pix (2026-07-25)
+Nova tabela `gastos_variaveis_manuais` (mes, descricao, valor, categoria,
+forma sempre 'pix') + rota `/variaveis/<mes>` (mesmo padrão de
+add/editar/apagar de `/fixos/<mes>`) -- pra despesa em Pix que não passa
+pelo Pluggy (ex.: paga de outra conta). Mesclada em `variaveis_itens`
+dentro de `construir_panorama_mensal()`. Sempre 100% editável/apagável
+(nunca é uma transação real).
+
+### Conexão da esposa (2ª titular) -- só o cartão dela, nunca a conta (2026-07-25)
+Ela é 2ª titular da MESMA conta corrente do usuário. A conexão dela no
+Pluggy é um **item separado** (Item ID próprio, `PLUGGY_ITEM_ID_ESPOSA`
+no `.env`, opcional) que traz 3 contas: BANK poupança (zerada), BANK
+corrente (espelho do saldo que o item principal já conta) e CREDIT Elo
+(dado novo, dela). Sincronizar a conta BANK dela dobraria o "Caixa
+disponível".
+
+Solução: `sync.sincronizar_cartao_apenas_credito()` sincroniza só as
+contas `CREDIT` do item dela (`normalizacao.normalizar_transacoes_de_contas`
+faz a normalização de sinal reaproveitando a mesma lógica de
+`normalizar_transacoes_pluggy`, mas com a lista de contas já filtrada).
+Chamado em `sync.main()` só se `PLUGGY_ITEM_ID_ESPOSA` estiver setado.
+Testado contra a API real em 2026-07-25: `Caixa disponível` ficou
+inalterado (R$ 19.680,08 antes/depois), só a conta CREDIT "ELO NANQUIM
+PRIME" entrou (87 transações reais de julho/26, R$ 7.534,92) -- validado
+local e depois em produção via `docker exec`.
 
 ### Migração de schema
 `gastos_fixos` ganhou a coluna `categoria` (grande categoria, pra
