@@ -5,6 +5,7 @@ gasto fixo por mês e orçamento por categoria.
 Uso local: python execution/app.py  (roda em http://localhost:8000)
 Em produção (VPS): servido via gunicorn atrás do Traefik (ver Dockerfile).
 """
+import sqlite3
 from datetime import datetime
 
 from flask import Flask, redirect, request
@@ -211,11 +212,16 @@ def fixos_mes(mes):
             formas_existentes = {r["nome"]: r["forma"] for r in conexao.execute(
                 "SELECT nome, forma FROM gastos_fixos WHERE mes = ?", (mes,)
             )}
+            renomear_depois = []  # (nome_atual, novo_nome) -- só aplicado no fim, ver abaixo
             for nome, forma in formas_existentes.items():
+                # Categoria é classificação permanente do item -- replica pra
+                # TODOS os meses (passado e futuro), não só o mês aberto
+                # (pedido do usuário em 2026-07-26: "com os valores não
+                # precisa replicar mês a mês... categoria e nome pode sim").
                 categoria = request.form.get(f"categoria__{nome}", "Outros")
                 conexao.execute(
-                    "UPDATE gastos_fixos SET categoria = ? WHERE mes = ? AND nome = ?",
-                    (categoria, mes, nome),
+                    "UPDATE gastos_fixos SET categoria = ? WHERE nome = ?",
+                    (categoria, nome),
                 )
 
                 if forma == "cartao":
@@ -225,23 +231,39 @@ def fixos_mes(mes):
                     # tocada, só a linha em gastos_fixos que a linkava.
                     if request.form.get(f"desfazer__{nome}"):
                         conexao.execute("DELETE FROM gastos_fixos WHERE mes = ? AND nome = ?", (mes, nome))
-                    continue
+                        continue
+                else:
+                    if request.form.get(f"remover__{nome}"):
+                        conexao.execute("DELETE FROM gastos_fixos WHERE mes = ? AND nome = ?", (mes, nome))
+                        continue
 
-                if request.form.get(f"remover__{nome}"):
-                    conexao.execute("DELETE FROM gastos_fixos WHERE mes = ? AND nome = ?", (mes, nome))
-                    continue
+                    valor_str = request.form.get(f"fixo__{nome}", "").strip()
+                    if valor_str:
+                        try:
+                            valor_float = float(valor_str.replace(",", "."))
+                        except ValueError:
+                            valor_float = None
+                        if valor_float is not None:
+                            conexao.execute(
+                                "UPDATE gastos_fixos SET valor = ? WHERE mes = ? AND nome = ?",
+                                (valor_float, mes, nome),
+                            )
 
-                valor_str = request.form.get(f"fixo__{nome}", "").strip()
-                if valor_str:
-                    try:
-                        valor_float = float(valor_str.replace(",", "."))
-                    except ValueError:
-                        valor_float = None
-                    if valor_float is not None:
-                        conexao.execute(
-                            "UPDATE gastos_fixos SET valor = ? WHERE mes = ? AND nome = ?",
-                            (valor_float, mes, nome),
-                        )
+                novo_nome = request.form.get(f"novo_nome__{nome}", "").strip()
+                if novo_nome and novo_nome != nome:
+                    renomear_depois.append((nome, novo_nome))
+
+            # Nome também é permanente -- renomeia em TODOS os meses. Feito
+            # por último (depois de categoria/valor/remoção acima, que usam
+            # o nome ANTIGO como chave dos campos do formulário). Se der
+            # colisão com um nome já existente em algum mês, não renomeia
+            # nada (mantém o nome antigo em todos os meses) em vez de deixar
+            # inconsistência pela metade.
+            for nome_atual, novo_nome in renomear_depois:
+                try:
+                    conexao.execute("UPDATE gastos_fixos SET nome = ? WHERE nome = ?", (novo_nome, nome_atual))
+                except sqlite3.IntegrityError:
+                    pass
             return redirect(f"/fixos/{mes}")
 
         linhas = conexao.execute(
@@ -270,9 +292,10 @@ def fixos_mes(mes):
 
     linhas_html = "".join(
         f"""<tr>
-             <td>{r['nome']} <small>({'Pix' if r['forma'] == 'pix' else 'Cartão'})</small></td>
+             <td><input type="text" name="novo_nome__{r['nome']}" value="{r['nome']}" title="Nome vale pra todos os meses">
+                 <small>({'Pix' if r['forma'] == 'pix' else 'Cartão'})</small></td>
              <td class="col-valor">{celula_valor(r)}</td>
-             <td class="col-categoria"><select name="categoria__{r['nome']}">{opcoes_categoria(r['categoria'] or 'Outros')}</select></td>
+             <td class="col-categoria"><select name="categoria__{r['nome']}" title="Categoria vale pra todos os meses">{opcoes_categoria(r['categoria'] or 'Outros')}</select></td>
              <td class="col-remover">{celula_remover(r)}</td>
            </tr>"""
         for r in linhas
