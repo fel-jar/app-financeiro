@@ -118,6 +118,13 @@ def _migrar(conexao: sqlite3.Connection):
     _adicionar_coluna_se_faltando(conexao, "gastos_fixos", "transacao_id_origem", "TEXT")
     _adicionar_coluna_se_faltando(conexao, "transacoes", "categoria_grande_custom", "TEXT")
 
+    # "Família e Saúde" foi separada em duas grandes categorias em
+    # 2026-07-26 (pedido do usuário) -- linhas já semeadas com o nome
+    # antigo (ex.: Psicóloga) migram pra "Saúde". Idempotente (não sobra
+    # nenhuma linha com o nome antigo depois da primeira vez).
+    conexao.execute("UPDATE gastos_fixos SET categoria = 'Saúde' WHERE categoria = 'Família e Saúde'")
+    conexao.execute("UPDATE transacoes SET categoria_grande_custom = 'Saúde' WHERE categoria_grande_custom = 'Família e Saúde'")
+
 
 def _adicionar_coluna_se_faltando(conexao: sqlite3.Connection, tabela: str, coluna: str, tipo: str):
     colunas = {row["name"] for row in conexao.execute(f"PRAGMA table_info({tabela})")}

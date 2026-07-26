@@ -22,7 +22,7 @@ construir_panorama_mensal() em gerar_dashboard.py).
 # agrupar visualmente junto com os itens variáveis reais -- não é a
 # categoria fina da Pluggy.
 GASTOS_FIXOS = [
-    {"nome": "Psicóloga", "valor": 720.00, "forma": "pix", "categoria": "Família e Saúde"},
+    {"nome": "Psicóloga", "valor": 720.00, "forma": "pix", "categoria": "Saúde"},
     {"nome": "Financiamento carro", "valor": 2760.56, "forma": "pix", "categoria": "Transporte"},
     {"nome": "Internet", "valor": 99.90, "forma": "pix", "categoria": "Assinaturas"},
     {"nome": "Condomínio", "valor": 1162.63, "forma": "pix", "categoria": "Casa"},
