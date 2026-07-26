@@ -688,3 +688,168 @@ superestimado/subestimado e o "cobre/não cobre" saía errado. Corrigido em
   próprio mês de calendário, e as fixas de cartão convertidas via "→ fixo"
   já são semeadas por `MESES_SEED_FIXOS` a partir do mês de calendário
   real; não têm o mesmo problema de nomeação de fatura que as Variáveis.
+
+## Status atual (2026-07-26) — Revisão de layout e camada visual compartilhada
+
+Revisão geral pedida pelo usuário ("deixe o layout mais bonito e mais
+organizado"), rodada com a skill `impeccable` (modo **Operate**: a tela
+existe pra decidir, não pra impressionar) e a skill `dataviz` pros
+gráficos. Direção escolhida pelo usuário: **refino do visual atual**, não
+redesign — a identidade sóbria (off-white/preto, azul = entra, vermelho =
+sai) foi preservada.
+
+### Camada visual: `execution/ui.py` e `execution/graficos.py`
+
+Antes existiam dois sistemas visuais: o CSS do dashboard e o
+`ESTILO_PAGINA_SIMPLES` do `app.py` (hex cravado, sem tema escuro
+persistente, azul diferente do azul do painel). Quem clicava em "editar"
+saía de um app e entrava em outro.
+
+- `ui.py` — tokens (cores, tipografia, sombra, raio), CSS base, shell de
+  página (`documento`, `cabecalho`, `pagina_formulario`), formatação
+  monetária (`fmt_brl` e amigos, movidos pra cá; `gerar_dashboard.py`
+  reexporta pra não quebrar quem já importava de lá) e o mapa **cor por
+  grande categoria**. Todas as páginas do Flask usam o mesmo shell.
+- `graficos.py` — os quatro gráficos, em SVG/HTML puro. Sem Chart.js/CDN:
+  o HTML é servido inteiro e o `main()` ainda gera arquivo estático que
+  precisa abrir offline.
+- O tema escolhido é aplicado por um script no `<head>` (antes da
+  primeira pintura). Estava no fim do `<body>`, e a página piscava clara
+  antes de virar escura.
+
+### Gráficos novos (todos com dado real, nada decorativo)
+
+1. **Rosca por categoria** — composição do próximo mês (fixas +
+   variáveis), com legenda valor + % e versão em tabela.
+2. **Fixas contra variáveis** — colunas empilhadas dos 6 meses do painel,
+   com a linha tracejada da entrada prevista por cima. Responde "quanto
+   desse mês eu consigo cortar se precisar".
+3. **Orçamento x real** — barras por grande categoria no mês corrente,
+   com marca vertical do ritmo esperado até hoje (dia 20 de 31 = 65% do
+   teto). Verde < 80%, amarelo 80–100%, vermelho estourado.
+4. **Saldo projetado** — linha dos 6 meses, faixa vermelha só quando
+   existe mês negativo, rótulo direto no primeiro mês que cruza o zero.
+
+### Achados de validação de paleta (não refazer do zero)
+
+Rodado `validate_palette.js` da skill `dataviz` contra as superfícies do
+projeto (`#fcfcfb` claro / `#1a1a19` escuro):
+
+- A ordem de slots azul → laranja → água → amarelo → magenta → verde →
+  violeta → vermelho passa em tudo **quando as cores aparecem vizinhas
+  nessa ordem** (pior par adjacente ΔE 9.1 claro / 8.4 escuro).
+- Ela **falha** se qualquer par pode encostar em qualquer outro
+  (`--pairs all`): laranja x vermelho ΔE 7.1, magenta x água ΔE 1.6 no
+  escuro. Testei todos os subconjuntos de 5 e 6 cores das 8 — **nenhum**
+  passa. Conclusão que amarra o código: a rosca desenha os arcos na
+  **ordem fixa dos slots**, nunca ordenados por valor, e sempre carrega
+  legenda + tabela.
+- Fixas x Variáveis usa violeta x laranja, que passa até em `--pairs all`
+  nos dois temas (ΔE 29.5 / 26.0), deixando o azul reservado pro que é
+  entrada de dinheiro.
+
+### Outros achados da revisão
+
+- **SVG com viewBox escalado encolhe o texto junto.** O gráfico de linha
+  original tinha rótulos de 11px que viravam ~7px num celular de 390px.
+  Reescrito com geometria em SVG (`preserveAspectRatio="none"` +
+  `vector-effect="non-scaling-stroke"`, eixo X em % e eixo Y em px de
+  altura fixa) e todo texto/marcador em HTML posicionado por
+  porcentagem. Vale como padrão pros próximos gráficos.
+- Chrome headless (`--headless --screenshot`) **força viewport mínima de
+  500px**: um screenshot com `--window-size=390` só corta a imagem, não
+  testa o layout de celular. Pra achar overflow horizontal de verdade,
+  injetar um script que compara `scrollWidth` com `innerWidth`.
+- O detector do `impeccable` acusa "single font" — exceção deliberada: a
+  referência da `dataviz` manda usar a sans do sistema inclusive nos
+  números, e a hierarquia aqui é feita por peso e tamanho.
+
+### Dívida de DADOS descoberta (não é layout, mas os gráficos expuseram)
+
+Com tudo agrupado por grande categoria, ficou visível que **"Outros"
+domina**: R$ 139k de despesa histórica (a maior categoria por larga
+margem) e **todos os 9 gastos fixos de todo mês estão gravados como
+"Outros"** no banco, mesmo os que têm categoria óbvia na lista estática
+de `gastos_fixos.py` (Psicóloga → Saúde, Financiamento carro →
+Transporte, Condomínio/Luz → Casa). Enquanto isso não for corrigido, a
+rosca e o orçamento x real mostram um bloco cinza gigante em vez da
+composição real. Corrigível pela tela `/fixos/<mes>` (o select já está
+lá) ou por um UPDATE no seed.
+
+### Cinco melhorias executadas em seguida (2026-07-26, parte 2)
+
+1. **Categorização corrigida na raiz.** Duas coisas diferentes causavam o
+   bloco cinza gigante:
+   - `seed_gastos_fixos` só preenchia a categoria quando ela era NULL, mas
+     as linhas antigas nasceram com o literal `'Outros'` -- o backfill
+     nunca disparava. Agora trata `'Outros'` como "sem categoria", e só
+     quando a lista estática tem categoria de verdade pra oferecer (nunca
+     sobrescreve escolha deliberada do usuário).
+   - `GRANDES_CATEGORIAS` não tinha onde colocar R$ 139 mil de despesa:
+     Automotivo (R$ 65 mil!), Compras, Livraria, Eletrônicos, Vestuário,
+     Impostos, Seguro... Criadas as grandes categorias **Compras** e
+     **Impostos e seguros**, e "Automotivo" foi pra Transporte. "Outros"
+     caiu de R$ 139 mil pra ~R$ 750 no histórico (de 50% pra 8% do mês).
+   - Como a paleta validada tem 8 cores e o projeto passou a ter 10
+     grandes categorias, `ui.ORDEM_CATEGORIAS` fixa quais 8 recebem cor
+     (as de maior peso no gasto MENSAL). As demais entram no arco cinza,
+     mas a legenda desse arco agora lista o que está lá dentro.
+2. **Orçamento por grande categoria** (`/orcamento`). Antes editava ~50
+   categorias finas da Pluggy pra ver 9 grupos somados no painel. Agora
+   edita exatamente o que o painel mostra, com a média de 3 meses como
+   referência ao lado de cada campo e campo vazio = sem teto. Nova tabela
+   `orcamento_grande`; a fina continua sendo alimentada pela
+   sincronização e vira a sugestão inicial. `db.VERSAO_TAXONOMIA_GRANDES`
+   força o recálculo das SUGESTÕES quando o mapeamento muda -- sem isso,
+   o teto sugerido de "Compras" ficaria pendurado em "Outros" pra sempre.
+3. **Comparativo com o mês anterior** no topo: gasto do mês corrente até
+   hoje contra o MESMO intervalo de dias do mês anterior (dia 1 ao dia de
+   hoje). Comparar mês inteiro contra mês parcial sempre diria "melhorei".
+4. **Filtro de período na rosca**: previsto / mês corrente até hoje /
+   média de 3 meses. Feito com `input:checked ~ painel` -- zero JS, os
+   três blocos vêm no HTML e a troca responde no toque.
+5. **"Quando a conta afrouxa"**: parcelas cuja última cai dentro da janela
+   projetada, agrupadas por mês, com o alívio mensal de cada grupo. Nos
+   dados reais são 60+ parcelas em 6 meses, então cada mês é um
+   `<details>` fechado (só o primeiro abre) -- a lista aberta empurrava o
+   painel mensal, que é onde o usuário age, pra três telas abaixo.
+
+### Revisão de design executada (2026-07-26, parte 3)
+
+Rodada com a skill `frontend-design` sobre o painel já refinado. Cinco
+mudanças, todas verificadas nos dois temas e em tela estreita:
+
+1. **O veredito virou o herói.** Antes: uma frase numa caixa + cinco
+   indicadores do mesmo tamanho competindo por atenção -- o padrão de
+   dashboard genérico, em que nada responde sozinho "dá ou não dá?".
+   Agora o número que decide vive DENTRO da frase, em corpo grande
+   (`clamp(38px, 7vw, 60px)`), e os indicadores viraram uma faixa de
+   apoio de uma linha, separada por fios de 1px. Um elemento gritando,
+   quatro sussurrando.
+2. **Fonte própria só pros números** (`execution/fonte_numeros.py`): IBM
+   Plex Sans (OFL), eixo variável, subsetada nos ~20 glifos de moeda --
+   10,8 KB embutidos em base64, porque o HTML estático precisa abrir
+   offline. O texto de interface continua na sans do sistema. Motivo: o
+   conteúdo desta tela É número, e a sans do sistema muda de máquina pra
+   máquina -- a coluna de valores nunca tinha a mesma cara duas vezes.
+   O comando pra regerar o subset está no topo do módulo.
+3. **Nem tudo é card.** Diagnóstico e histórico viraram `.bloco` (seção
+   sem caixa, separada por fio) e seus indicadores usam a mesma faixa do
+   topo. Doze caixas idênticas empilhadas achatavam a hierarquia: o que
+   decide (trajetória e painel mensal) pesava igual ao que é consulta.
+4. **Um nome por conceito.** O mesmo número se chamava "A pagar em
+   Ago/26" no indicador, "Despesas totais" no card do mês e "a pagar" no
+   cabeçalho recolhido; e "Sobra projetada" x "Saldo projetado" pro
+   outro. Agora: **A pagar** e **Saldo projetado**, em todo lugar.
+5. **Selo de dado velho.** Se a última sincronização passou de 36h, o
+   herói ganha "Dados de N dias atrás" com data e hora. O painel projeta
+   seis meses em cima do saldo de hoje; a única pista de que o job parou
+   era o "Atualizado em" do cabeçalho -- que marca quando a PÁGINA foi
+   montada, não quando o dado chegou. Duas coisas diferentes que
+   pareciam a mesma.
+
+O detector do `impeccable` agora passa sem nenhum achado (o aviso de
+"single font" caiu com a fonte dos números).
+
+**Não feito de propósito**: tela de primeira vez (banco vazio, antes da
+primeira sincronização) -- o usuário pediu pra deixar de fora.

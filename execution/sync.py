@@ -15,7 +15,8 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 from pluggy_client import from_env
-from normalizacao import normalizar_transacoes_pluggy, normalizar_transacoes_de_contas
+from normalizacao import normalizar_transacoes_pluggy, normalizar_transacoes_de_contas, traduzir_categoria
+from categorias_grandes import grande_categoria
 from gastos_fixos import GASTOS_FIXOS, valor_planejamento
 import db
 
@@ -113,10 +114,23 @@ def seed_gastos_fixos(conexao):
             # Backfill: linhas seedadas antes da coluna categoria existir
             # ficam com NULL -- preenche sem sobrescrever edição nenhuma
             # (só o campo categoria, nunca o valor).
-            conexao.execute(
-                "UPDATE gastos_fixos SET categoria = ? WHERE mes = ? AND nome = ? AND categoria IS NULL",
-                (item.get("categoria", "Outros"), mes, item["nome"]),
-            )
+            #
+            # 'Outros' também é tratado como "sem categoria" (achado de
+            # 2026-07-26): as linhas criadas por versões antigas do seed
+            # nasceram com o literal 'Outros', não com NULL, então o
+            # backfill nunca disparava -- os 9 fixos de todo mês estavam
+            # gravados como 'Outros' e a rosca do painel mostrava um bloco
+            # cinza gigante em vez de Casa/Saúde/Transporte. O UPDATE só
+            # roda quando a lista estática tem uma categoria de verdade
+            # pra oferecer, então uma escolha deliberada do usuário
+            # (qualquer coisa != 'Outros') nunca é sobrescrita.
+            categoria_estatica = item.get("categoria", "Outros")
+            if categoria_estatica != "Outros":
+                conexao.execute(
+                    """UPDATE gastos_fixos SET categoria = ?
+                       WHERE mes = ? AND nome = ? AND (categoria IS NULL OR categoria = 'Outros')""",
+                    (categoria_estatica, mes, item["nome"]),
+                )
 
 
 def seed_orcamento_categoria(conexao, transacoes: list[dict]):
@@ -142,6 +156,37 @@ def seed_orcamento_categoria(conexao, transacoes: list[dict]):
         conexao.execute(
             "INSERT OR IGNORE INTO orcamento_categoria (categoria, limite_mensal, origem) VALUES (?, ?, 'media_historica')",
             (cat, round(media, 2)),
+        )
+
+    seed_orcamento_grande(conexao, transacoes)
+
+
+def seed_orcamento_grande(conexao, transacoes: list[dict]):
+    """Mesma ideia do seed fino, na granularidade que o usuário edita
+    desde 2026-07-26 (ver /orcamento): média dos últimos meses fechados
+    por GRANDE categoria, só pra quem ainda não tem teto. A média é
+    calculada direto do gasto agrupado -- não é a soma das médias finas,
+    que ficaria maior (cada categoria fina contribuiria com o próprio pico
+    mesmo em meses sem gasto nenhum)."""
+    mes_atual = datetime.now().strftime("%Y-%m")
+    por_grande_mes = defaultdict(lambda: defaultdict(float))
+    for t in transacoes:
+        if t["amount"] >= 0:
+            continue
+        mes = t["date"][:7]
+        if mes >= mes_atual:
+            continue
+        grande = t.get("categoriaGrandeCustom") or grande_categoria(traduzir_categoria(t.get("category") or "Outros"))
+        por_grande_mes[grande][mes] += abs(t["amount"])
+
+    for grande, valores_por_mes in por_grande_mes.items():
+        ultimos = sorted(valores_por_mes.keys())[-MESES_MEDIA_ORCAMENTO:]
+        if not ultimos:
+            continue
+        media = sum(valores_por_mes[m] for m in ultimos) / len(ultimos)
+        conexao.execute(
+            "INSERT OR IGNORE INTO orcamento_grande (grande, limite_mensal, origem) VALUES (?, ?, 'media_historica')",
+            (grande, round(media, 2)),
         )
 
 

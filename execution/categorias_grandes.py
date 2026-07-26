@@ -26,7 +26,15 @@ GRANDES_CATEGORIAS = {
         "Lazer", "Restaurante", "Ingressos", "Jogos", "Viagem",
         "Aeroporto e passagens", "Hospedagem",
     },
-    "Transporte": {"Táxi/App de transporte", "Aluguel de carro", "Bicicleta"},
+    "Transporte": {"Táxi/App de transporte", "Aluguel de carro", "Bicicleta", "Automotivo"},
+    # Adicionadas em 2026-07-26: sem elas, R$ 139 mil de despesa histórica
+    # (a MAIOR fatia de todas) caía em "Outros" e a rosca do painel virava
+    # um bloco cinza sem informação nenhuma. Ver diretiva.
+    "Compras": {
+        "Compras", "Compras online", "Livraria", "Eletrônicos", "Vestuário",
+        "Material de escritório", "Artigos esportivos",
+    },
+    "Impostos e seguros": {"Impostos", "IOF", "Juros e multas", "Seguro"},
     "PerMax": set(),
 }
 

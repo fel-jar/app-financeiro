@@ -85,6 +85,28 @@ def carregar_variaveis_manuais_do_banco() -> dict[str, list[dict]]:
     return por_mes
 
 
+def carregar_orcamento_por_grande() -> dict[str, float]:
+    """Teto mensal por GRANDE categoria (Mercado, Casa, Lazer...), que é a
+    granularidade em que o usuário edita em /orcamento e em que o painel
+    compara com o gasto real. A tabela fina (orcamento_categoria) só
+    alimenta a sugestão inicial -- ver db._semear_orcamento_grande."""
+    with db.sessao() as conexao:
+        linhas = conexao.execute(
+            "SELECT grande, limite_mensal FROM orcamento_grande"
+        ).fetchall()
+    return {r["grande"]: r["limite_mensal"] for r in linhas if r["limite_mensal"]}
+
+
+def carregar_ultima_sincronizacao() -> str | None:
+    """Momento da sincronização mais recente com o banco (ISO). O painel
+    projeta seis meses a partir do saldo de hoje -- se o job parar de
+    rodar, ele continua desenhando com confiança um futuro construído em
+    cima de um saldo velho, e nada na tela denuncia isso."""
+    with db.sessao() as conexao:
+        row = conexao.execute("SELECT MAX(synced_at) AS ultima FROM contas").fetchone()
+    return row["ultima"] if row and row["ultima"] else None
+
+
 def carregar_caixa_externo() -> float:
     """Reserva manual (dinheiro/contas fora do Pluggy), editável em
     /caixa-externo -- guardada como meta única (não muda por mês)."""

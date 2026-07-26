@@ -138,3 +138,45 @@ execution/agente_llm.py ──► OpenRouter (chat completions + tool calling)
    mover essa checagem pra `agente_ferramentas.editar_transacao` (ex.: exigir
    um parâmetro de confirmação quando `consultar_gastos` recente listou mais
    de uma opção).
+
+## Auditoria de fatura em PDF (2026-07-26)
+
+Mandar o PDF da fatura no Telegram dispara uma auditoria contra o que já
+está sincronizado: `agente_llm.processar_atualizacao` detecta
+`message.document`, baixa o arquivo (`getFile` + `api.telegram.org/file/`),
+roda `agente_ferramentas.auditar_fatura_pdf` e injeta o RESULTADO no
+prompt como contexto — o LLM só explica e propõe, nunca faz a extração.
+
+**Por que o parser é determinístico** (`fatura_parser.py`, pdfplumber, sem
+LLM): conferir fatura é comparação de números, não interpretação. Pedir
+pro modelo ler o PDF custa tokens a cada envio e erra silenciosamente em
+valor/data — exatamente o que a auditoria existe pra pegar.
+`auditar_fatura_pdf` **não** está em `FERRAMENTAS`/`EXECUTORES` de
+propósito: roda antes do modelo, não por escolha dele.
+
+Formato do PDF (aprendido testando faturas reais):
+- `extract_text()` mistura a coluna de lançamentos com a barra lateral de
+  limites/taxas na ordem visual — inútil pros itens. `extract_tables()`
+  isola a tabela de Lançamentos numa célula só, uma linha por lançamento.
+- Linha = `DD/MM DESCRIÇÃO [CIDADE] VALOR[-]`; o `-` final marca
+  CRÉDITO/estorno. Linhas de troca de portador e subtotal não começam com
+  `DD/MM` e caem fora do regex sozinhas.
+- Lançamento não traz o ano: assume o do vencimento, menos quando o mês do
+  lançamento é maior que o do vencimento (fatura de janeiro com compra de
+  dezembro).
+- O nome do cartão não tem posição fixa. Em vez de extrair, procura qual
+  `contas.account_name` já cadastrado aparece no texto da página 1 —
+  `NOMES_CARTOES_CONHECIDOS` em `agente_ferramentas.py` precisa bater
+  exatamente com o nome no banco (hoje: VISA INFINITE PRIME, THE PLATINUM
+  CARD, ELO NANQUIM PRIME). Cartão novo = acrescentar ali.
+
+**Cuidado com `sobrando_no_banco`**: a comparação usa uma janela de datas
+(min/max dos itens da fatura), não o ciclo real de fechamento — então o
+banco pode ter lançamento de OUTRO ciclo dentro da janela. O próprio
+retorno carrega esse aviso pro modelo, e só um estorno/duplicata óbvio
+deve ser tratado como divergência de verdade. `faltando_no_banco` é o
+lado confiável.
+
+Dependência nova: `pdfplumber` no `requirements.txt`. Só
+`agente_llm`/`agente_ferramentas` importam — o app web não precisa dela
+pra subir.

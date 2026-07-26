@@ -13,6 +13,7 @@ telegram_diario.py), OPENROUTER_API_KEY (e opcionalmente OPENROUTER_MODEL).
 import json
 import os
 import sys
+import tempfile
 import time
 from datetime import datetime
 
@@ -21,7 +22,7 @@ from dotenv import load_dotenv
 
 import db
 import openrouter_client
-from agente_ferramentas import CATEGORIAS_VALIDAS, EXECUTORES, FERRAMENTAS
+from agente_ferramentas import CATEGORIAS_VALIDAS, EXECUTORES, FERRAMENTAS, auditar_fatura_pdf
 
 load_dotenv()
 
@@ -29,6 +30,7 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
 
 TELEGRAM_BASE = "https://api.telegram.org/bot{token}/{metodo}"
+TELEGRAM_FILE_BASE = "https://api.telegram.org/file/bot{token}/{file_path}"
 MAX_MENSAGENS_CONTEXTO = 40  # histórico carregado do banco pra dar memória entre reinícios
 MAX_IDAS_FERRAMENTA = 6  # trava de segurança contra loop de tool-calling
 CHAVE_OFFSET = "telegram_agente_offset"
@@ -64,7 +66,14 @@ def _system_prompt() -> str:
         "consultar_painel_mensal.\n"
         "- Se pedirem pra atualizar/sincronizar os dados agora (fora do horário fixo "
         "diário), use sincronizar_agora -- avise que pode levar alguns segundos antes de "
-        "chamar, e confirme quantas transações vieram depois."
+        "chamar, e confirme quantas transações vieram depois.\n"
+        "- Quando o usuário mandar uma fatura em PDF, o resultado da auditoria automática "
+        "(parser determinístico, já comparado com o banco) chega numa mensagem do sistema. "
+        "Explique em português o que bate e o que diverge (o que falta sincronizar, o que "
+        "sobra sem corresponder). Se propuser uma correção (ex.: renomear/recategorizar, "
+        "rodar sincronizar_agora), **peça confirmação explícita antes de aplicar** -- só "
+        "chame a ferramenta de escrita depois que a pessoa confirmar ('sim', 'pode', "
+        "'confirma'), diferente de um pedido direto de edição (esse pode aplicar na hora)."
     )
 
 
@@ -78,6 +87,20 @@ def enviar_mensagem(token: str, chat_id: str, texto: str):
     # Telegram limita 4096 caracteres por mensagem.
     for i in range(0, len(texto), 4000):
         _telegram("sendMessage", token, chat_id=chat_id, text=texto[i:i + 4000])
+
+
+def _baixar_documento_telegram(token: str, file_id: str) -> str:
+    """Baixa um documento (ex.: PDF de fatura) enviado no Telegram pro
+    diretório temporário do sistema. Retorna o caminho local do arquivo."""
+    info = _telegram("getFile", token, file_id=file_id)
+    file_path = info["result"]["file_path"]
+    resp = requests.get(TELEGRAM_FILE_BASE.format(token=token, file_path=file_path), timeout=60)
+    resp.raise_for_status()
+
+    destino = os.path.join(tempfile.gettempdir(), f"fatura_{file_id}.pdf")
+    with open(destino, "wb") as f:
+        f.write(resp.content)
+    return destino
 
 
 def _executar_ferramenta(nome: str, argumentos_json: str) -> str:
@@ -148,14 +171,32 @@ def processar_atualizacao(cliente, token: str, chat_id_permitido: str, atualizac
         print(f"Ignorando mensagem de chat não autorizado: {chat_id}")
         return
 
-    texto = mensagem.get("text")
-    if not texto:
-        enviar_mensagem(token, chat_id, "Só entendo texto por enquanto.")
-        return
-
     remetente = mensagem.get("from") or {}
     nome_remetente = remetente.get("first_name") or remetente.get("username") or "Alguém"
-    texto_com_remetente = f"[{nome_remetente}]: {texto}"
+
+    documento = mensagem.get("document")
+    if documento:
+        nome_arquivo = documento.get("file_name", "")
+        if not nome_arquivo.lower().endswith(".pdf"):
+            enviar_mensagem(token, chat_id, "Só sei auditar fatura em PDF por enquanto.")
+            return
+        enviar_mensagem(token, chat_id, f"Lendo a fatura ({nome_arquivo})...")
+        try:
+            caminho = _baixar_documento_telegram(token, documento["file_id"])
+            resultado_auditoria = auditar_fatura_pdf(caminho)
+        except Exception as e:
+            enviar_mensagem(token, chat_id, f"Não consegui processar esse PDF: {e}")
+            return
+        texto_com_remetente = (
+            f"[{nome_remetente}]: (enviou a fatura {nome_arquivo} pra auditoria) "
+            f"Resultado da auditoria automática: {json.dumps(resultado_auditoria, ensure_ascii=False)}"
+        )
+    else:
+        texto = mensagem.get("text")
+        if not texto:
+            enviar_mensagem(token, chat_id, "Só entendo texto ou fatura em PDF por enquanto.")
+            return
+        texto_com_remetente = f"[{nome_remetente}]: {texto}"
 
     try:
         texto_resposta = responder(cliente, chat_id, texto_com_remetente)

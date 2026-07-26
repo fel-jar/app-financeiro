@@ -12,6 +12,7 @@ import os
 from datetime import date, datetime, timedelta
 
 import db
+import fatura_parser
 import sync
 from categorias_grandes import GRANDES_CATEGORIAS, grande_categoria
 from dados_db import (
@@ -21,6 +22,8 @@ from dados_db import (
 from gerar_dashboard import MESES_PT, construir_panorama_mensal
 from normalizacao import traduzir_categoria
 from pluggy_client import from_env as pluggy_from_env
+
+NOMES_CARTOES_CONHECIDOS = ["VISA INFINITE PRIME", "THE PLATINUM CARD", "ELO NANQUIM PRIME"]
 
 CATEGORIAS_VALIDAS = sorted(GRANDES_CATEGORIAS.keys()) + ["Outros"]
 LIMITE_ITENS = 30
@@ -209,6 +212,94 @@ def sincronizar_agora() -> dict:
         "sucesso": True,
         "transacoes_sincronizadas": len(transacoes),
         "sincronizado_em": datetime.now().isoformat(),
+    }
+
+
+def _data_iso_para_date(data_iso: str) -> date:
+    ano, mes, dia = data_iso.split("-")
+    return date(int(ano), int(mes), int(dia))
+
+
+def auditar_fatura_pdf(caminho_arquivo: str) -> dict:
+    """Compara uma fatura em PDF (baixada de um documento enviado no
+    Telegram) com o que já está sincronizado no banco -- parser
+    determinístico (fatura_parser.py, sem LLM) extrai os lançamentos reais
+    da fatura; esta função casa cada um (por data ±3 dias e valor) com uma
+    transação já sincronizada da mesma conta. Devolve o que está faltando
+    sincronizar e o que sobra no banco sem bater com a fatura (ex.: um
+    estorno que zera parcelas futuras que ainda não foram ajustadas).
+
+    Linhas de pagamento da própria fatura ("PAGTO"/"PAGAMENTO") são
+    ignoradas na comparação -- por design nunca são sincronizadas (são
+    dinheiro mudando de lugar, já contado compra a compra), não é
+    divergência real."""
+    try:
+        dados_fatura = fatura_parser.extrair_fatura(caminho_arquivo)
+    except Exception as e:
+        return {"erro": f"não consegui ler o PDF: {e}"}
+
+    cartao = fatura_parser.identificar_cartao(dados_fatura["_texto_pagina1"], NOMES_CARTOES_CONHECIDOS)
+    if not cartao:
+        return {"erro": "não reconheci qual cartão é essa fatura (nome não bate com nenhuma conta cadastrada)."}
+
+    with db.sessao() as conexao:
+        conta = conexao.execute("SELECT account_id FROM contas WHERE account_name = ?", (cartao,)).fetchone()
+        if conta is None:
+            return {"erro": f"cartão '{cartao}' identificado no PDF, mas essa conta não existe no banco."}
+        account_id = conta["account_id"]
+
+        datas = [it["data"] for it in dados_fatura["itens"]]
+        data_min = min(datas) if datas else dados_fatura["vencimento"]
+        data_max = max(datas) if datas else dados_fatura["vencimento"]
+
+        linhas_banco = conexao.execute(
+            """SELECT id, date, description, amount FROM transacoes
+               WHERE account_id = ? AND substr(date, 1, 10) BETWEEN ? AND ?""",
+            (account_id, data_min, data_max),
+        ).fetchall()
+
+    banco_usados = set()
+    faltando_no_banco = []
+    for item in dados_fatura["itens"]:
+        if "PAGTO" in item["descricao"].upper() or "PAGAMENTO" in item["descricao"].upper():
+            continue
+
+        data_item = _data_iso_para_date(item["data"])
+        achou = None
+        for row in linhas_banco:
+            if row["id"] in banco_usados:
+                continue
+            data_row = _data_iso_para_date(row["date"][:10])
+            if abs((data_row - data_item).days) > 3:
+                continue
+            sinal_ok = (item["tipo"] == "DEBIT" and row["amount"] < 0) or (item["tipo"] == "CREDIT" and row["amount"] > 0)
+            if sinal_ok and abs(abs(row["amount"]) - item["valor"]) < 0.05:
+                achou = row
+                break
+        if achou:
+            banco_usados.add(achou["id"])
+        else:
+            faltando_no_banco.append(item)
+
+    sobrando_no_banco = [
+        {"id": r["id"], "data": r["date"][:10], "descricao": r["description"], "valor": round(abs(r["amount"]), 2)}
+        for r in linhas_banco if r["id"] not in banco_usados
+    ]
+
+    return {
+        "cartao": cartao,
+        "vencimento": dados_fatura["vencimento"],
+        "total_fatura": dados_fatura["total_fatura"],
+        "itens_na_fatura": len(dados_fatura["itens"]),
+        "aviso_sobrando_no_banco": (
+            "sobrando_no_banco NÃO é confiável como divergência -- o banco pode ter dado de "
+            "OUTROS ciclos de fatura que não pertencem a esta fatura específica (a janela de "
+            "datas usada na comparação é só um recorte, não o fechamento real do ciclo). Só "
+            "trate como divergência de verdade um item de sobrando_no_banco que pareça um "
+            "ESTORNO/duplicata óbvia de algo em faltando_no_banco -- senão, ignore."
+        ),
+        "faltando_no_banco": faltando_no_banco,
+        "sobrando_no_banco": sobrando_no_banco,
     }
 
 
