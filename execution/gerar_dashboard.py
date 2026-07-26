@@ -173,6 +173,24 @@ def construir_panorama_mensal(
     retrato passado geraria sua própria projeção e duplicaria os valores
     futuros) + gasto variável manual em Pix (ver /variaveis/<mes>). MENOS
     o que já bate com um item de Fixas (ver transacao_id_origem).
+
+    **Achado 2026-07-26 (auditoria do usuário contra a fatura fechada)**:
+    uma compra parcelada em 18x (`MP*SAMSUNGELETRONICADAAMA`) foi
+    estornada no dia seguinte, mas isso escondia dois bugs:
+    1. A Pluggy, nesse caso, materializou as 18 parcelas de uma vez só, na
+       MESMA fatura (`bill_raw` igual pras 18), em vez de uma por fatura
+       futura como é o normal (ver `EC*SAMSUNG`, compra antiga, correta).
+       Projetar a partir da parcela 1/18 duplicava 2/18..18/18, que já
+       existiam como transação real.
+    2. O estorno (transação CREDIT, valor positivo) nunca era descontado
+       -- só existia o filtro `amount >= 0: continue`, que IGNORA
+       silenciosamente qualquer reembolso, positivo ou negativo pro
+       usuário.
+    Corrigido com duas travas abaixo: `maior_parcela_realizada` (nunca
+    projeta um número de parcela que já existe como transação real, seja
+    qual for a fatura) e `descricoes_estornadas` (uma transação CREDIT com
+    a mesma descrição de uma compra parcelada cancela o grupo inteiro --
+    real e projetado).
     """
     mes_atual = datetime.now().strftime("%Y-%m")
     salario_medio = salario_medio_recente(transacoes) or 0.0
@@ -181,6 +199,37 @@ def construir_panorama_mensal(
 
     fixas_mes_atual = _fixas_do_mes(mes_atual, gastos_fixos_por_mes)
     ids_convertidos_em_fixo = {f["transacao_id_origem"] for f in fixas_mes_atual if f.get("transacao_id_origem")}
+
+    # Pré-processamento: descobre parcelamentos estornados (mesma descrição
+    # ORIGINAL -- nunca a customizada, ver achado abaixo -- de uma
+    # transação CREDIT positiva) e o maior installmentNumber já
+    # materializado como transação real por (descrição, total de parcelas)
+    # -- essa chave identifica o mesmo parcelamento já que a API não
+    # devolve um id de compra único.
+    #
+    # **Achado 2026-07-26**: usar a descrição CUSTOMIZADA (`description`,
+    # que já vem com o apelido do usuário via description_custom) pra essa
+    # chave quebra o casamento -- um estorno sem apelido não bate com as
+    # parcelas que o usuário já tinha renomeado (aconteceu de verdade: 18
+    # parcelas da Samsung viraram "Celular novo", o estorno ficou com o
+    # nome original, e a exclusão nunca disparava). Sempre usar
+    # `descriptionRaw` (nunca sobrescrito) pra agrupar/casar; o apelido
+    # customizado continua sendo usado só na exibição (`descricao` no item
+    # do painel), não na lógica.
+    descricoes_estornadas: set[str] = set()
+    maior_parcela_realizada: dict[tuple, int] = {}
+    for t in transacoes:
+        meta = t.get("creditCardMetadata")
+        if not meta:
+            continue
+        descricao_chave = t.get("descriptionRaw") or t.get("description") or ""
+        if t.get("type") == "CREDIT" and t["amount"] > 0:
+            descricoes_estornadas.add(descricao_chave)
+            continue
+        total_parc, atual_parc = meta.get("totalInstallments"), meta.get("installmentNumber")
+        if t.get("type") == "DEBIT" and total_parc and atual_parc is not None:
+            chave = (descricao_chave, total_parc)
+            maior_parcela_realizada[chave] = max(maior_parcela_realizada.get(chave, 0), atual_parc)
 
     # Cartão: agrupado pelo mês de PAGAMENTO da fatura (billForecastDate
     # deslocado +1 mês -- ver docstring), não pela data da compra nem pelo
@@ -195,12 +244,15 @@ def construir_panorama_mensal(
             continue
         if t.get("id") in ids_convertidos_em_fixo:
             continue
+        descricao_chave = t.get("descriptionRaw") or t.get("description") or ""
+        if descricao_chave in descricoes_estornadas:
+            continue
+        descricao = t.get("description") or t.get("descriptionRaw") or "—"
         bill_raw = meta.get("billForecastDate") or t["date"][:7]
         mes_pagamento = _mes_seguinte(bill_raw, 1)
         atual_parc, total_parc = meta.get("installmentNumber"), meta.get("totalInstallments")
         valor = abs(t["amount"])
         categoria_pt = traduzir_categoria(t.get("category") or "Outros")
-        descricao = t.get("description") or t.get("descriptionRaw") or "—"
         parcela_txt = f"{atual_parc}/{total_parc}" if atual_parc and total_parc and total_parc > 1 else None
         despesas_cartao_por_pagamento[mes_pagamento].append({
             "id": t.get("id"),
@@ -214,7 +266,11 @@ def construir_panorama_mensal(
 
         if bill_raw != mes_atual or atual_parc is None or total_parc is None:
             continue
-        restantes = total_parc - atual_parc
+        chave = (descricao_chave, total_parc)
+        maior_ja_realizada = maior_parcela_realizada.get(chave, atual_parc)
+        if atual_parc != maior_ja_realizada:
+            continue  # só a parcela mais avançada do grupo projeta -- evita duplicar
+        restantes = total_parc - maior_ja_realizada
         for i in range(1, min(restantes, meses_futuros) + 1):
             bill_futuro = _mes_seguinte(bill_raw, i)
             mes_pagamento_futuro = _mes_seguinte(bill_futuro, 1)
@@ -225,7 +281,7 @@ def construir_panorama_mensal(
                 "categoria_grande": t.get("categoriaGrandeCustom") or grande_categoria(categoria_pt),
                 "forma": "cartao",
                 "valor": valor,
-                "parcela": f"{atual_parc + i}/{total_parc}",
+                "parcela": f"{maior_ja_realizada + i}/{total_parc}",
             })
 
     mes_pagamento_atual = _mes_seguinte(mes_atual, 1)
