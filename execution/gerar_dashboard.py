@@ -68,11 +68,6 @@ def saldo_atual(transacoes: list[dict]) -> float | None:
     return ultima["balance"]
 
 
-def transacoes_mes_atual(transacoes: list[dict]) -> list[dict]:
-    mes_atual = datetime.now().strftime("%Y-%m")
-    return [t for t in transacoes if t["date"][:7] == mes_atual]
-
-
 def media_categoria_meses_fechados(transacoes: list[dict], categoria: str, meses: int = 3) -> float | None:
     """Média de uma categoria de receita nos últimos `meses` meses JÁ
     FECHADOS (exclui o mês atual, que costuma estar parcial). Meses sem
@@ -142,22 +137,42 @@ def construir_panorama_mensal(
     variaveis_manuais_por_mes: dict[str, list[dict]] | None = None,
     meses_futuros: int = 5,
 ) -> list[dict]:
-    """Monta o painel mês a mês: mês atual + próximos `meses_futuros`, cada
-    um com despesas divididas em Fixas (lista editável, ver /fixos/<mes>) e
-    Variáveis (gasto real), entrada prevista (salário + renda extra) e um
-    saldo de caixa projetado rodando de mês a mês, pra responder "dá pra
-    cobrir?".
+    """Monta o painel mês a mês: a partir do mês em que a fatura que está
+    fechando agora será PAGA (não o mês atual do calendário), com
+    `meses_futuros` seguintes, cada um com despesas divididas em Fixas
+    (lista editável, ver /fixos/<mes>) e Variáveis (parcelas de cartão já
+    comprometidas), entrada prevista (salário + renda extra) e um saldo de
+    caixa projetado rodando de mês a mês, pra responder "dá pra cobrir?".
 
-    Variáveis do mês atual = toda despesa real do mês (Pix e cartão), MENOS
-    o que já bate com um item de Fixas (best-effort, ver
-    gastos_fixos.eh_transacao_do_fixo -- nem todo item tem regra confiável,
-    então algum fixo pode aparecer duplicado em Variáveis até ganhar uma
-    regra). Variáveis dos meses futuros = só parcelas de cartão já
-    comprometidas (não é estimativa nova -- a API guarda um "retrato" da
-    parcela em cada fatura já fechada, por isso a projeção parte só das
-    parcelas que estão na fatura ATUAL, `bill == mes_atual`, não de todo o
-    histórico, senão cada retrato passado geraria sua própria projeção e
-    duplicaria os valores futuros).
+    Decisão do usuário em 2026-07-25: o painel não mostra mais o mês
+    corrente do calendário nem projeta a partir dele -- gasto que já
+    aconteceu neste mês já está refletido no saldo real da conta (`saldo`
+    recebido aqui já é o saldo de hoje). O primeiro card do painel é o mês
+    em que a fatura que está fechando agora cai pra pagamento, com "caixa
+    no início do mês" = saldo real de hoje (não uma projeção arrastada).
+    "Eu não quero saber da projeção do passado mês a mês. Quero só saber o
+    que eu vou pagar de agosto para frente" -- ver `directives/
+    dashboard_fluxo_caixa.md`.
+
+    Cada compra de cartão é agrupada pela FATURA (`billForecastDate`), não
+    pela data da compra -- uma compra feita perto do fechamento do cartão
+    pode ter sido realizada em um mês mas só ser cobrada no mês seguinte.
+    Além disso, a Pluggy nomeia a fatura pelo mês de FECHAMENTO/referência,
+    não pelo mês em que ela é efetivamente paga -- o pagamento cai no mês
+    seguinte ao nome que a Pluggy dá (confirmado pelo usuário: fatura que a
+    Pluggy chama de "julho" é paga em agosto), por isso todo `bill` é
+    deslocado +1 mês (`_mes_seguinte(bill, 1)`) antes de virar chave do
+    painel. Transação de cartão sem `billForecastDate` (acontece bastante
+    nos dados reais -- ver achado 2026-07-25) cai de volta na data da
+    própria compra, pra nunca sumir uma despesa real do painel.
+
+    Variáveis = só parcelas de cartão já comprometidas (não é estimativa
+    nova -- a API guarda um "retrato" da parcela em cada fatura já
+    fechada, por isso a projeção parte só das parcelas que estão na fatura
+    ATUAL, `bill_raw == mes_atual`, não de todo o histórico, senão cada
+    retrato passado geraria sua própria projeção e duplicaria os valores
+    futuros) + gasto variável manual em Pix (ver /variaveis/<mes>). MENOS
+    o que já bate com um item de Fixas (ver transacao_id_origem).
     """
     mes_atual = datetime.now().strftime("%Y-%m")
     salario_medio = salario_medio_recente(transacoes) or 0.0
@@ -167,44 +182,43 @@ def construir_panorama_mensal(
     fixas_mes_atual = _fixas_do_mes(mes_atual, gastos_fixos_por_mes)
     ids_convertidos_em_fixo = {f["transacao_id_origem"] for f in fixas_mes_atual if f.get("transacao_id_origem")}
 
-    variaveis_atual: list[dict] = []
-    for t in transacoes_mes_atual(transacoes):
-        if t["amount"] >= 0:
+    # Cartão: agrupado pelo mês de PAGAMENTO da fatura (billForecastDate
+    # deslocado +1 mês -- ver docstring), não pela data da compra nem pelo
+    # nome cru que a Pluggy dá à fatura. Cada transação real entra direto
+    # no mês em que será paga (inclusive a fatura que está fechando agora),
+    # e só as parcelas em aberto na fatura ATUAL são projetadas pros meses
+    # seguintes.
+    despesas_cartao_por_pagamento: dict = defaultdict(list)
+    for t in transacoes:
+        meta = t.get("creditCardMetadata")
+        if not meta or t.get("type") != "DEBIT" or t["amount"] >= 0:
             continue
         if t.get("id") in ids_convertidos_em_fixo:
             continue
+        bill_raw = meta.get("billForecastDate") or t["date"][:7]
+        mes_pagamento = _mes_seguinte(bill_raw, 1)
+        atual_parc, total_parc = meta.get("installmentNumber"), meta.get("totalInstallments")
+        valor = abs(t["amount"])
         categoria_pt = traduzir_categoria(t.get("category") or "Outros")
         descricao = t.get("description") or t.get("descriptionRaw") or "—"
-        variaveis_atual.append({
+        parcela_txt = f"{atual_parc}/{total_parc}" if atual_parc and total_parc and total_parc > 1 else None
+        despesas_cartao_por_pagamento[mes_pagamento].append({
             "id": t.get("id"),
             "descricao": descricao,
             "categoria": categoria_pt,
             "categoria_grande": t.get("categoriaGrandeCustom") or grande_categoria(categoria_pt),
-            "forma": "cartao" if t.get("creditCardMetadata") else "pix",
-            "valor": abs(t["amount"]),
-            "parcela": None,
+            "forma": "cartao",
+            "valor": valor,
+            "parcela": parcela_txt,
         })
 
-    # Parcelas de cartão já comprometidas pros próximos meses (mesma lógica
-    # de projeção de sempre, só que agora alimenta "Variáveis" em vez de
-    # uma "fatura" separada).
-    detalhe_futuro: dict = defaultdict(list)
-    for t in transacoes:
-        meta = t.get("creditCardMetadata")
-        if not meta or t.get("type") != "DEBIT":
-            continue
-        atual_parc, total_parc, bill = meta.get("installmentNumber"), meta.get("totalInstallments"), meta.get("billForecastDate")
-        if atual_parc is None or total_parc is None or bill != mes_atual:
+        if bill_raw != mes_atual or atual_parc is None or total_parc is None:
             continue
         restantes = total_parc - atual_parc
-        if restantes <= 0:
-            continue
-        valor = abs(t["amount"])
-        categoria_pt = traduzir_categoria(t.get("category") or "Outros")
-        descricao = t.get("description") or t.get("descriptionRaw") or "—"
         for i in range(1, min(restantes, meses_futuros) + 1):
-            mes_futuro = _mes_seguinte(bill, i)
-            detalhe_futuro[mes_futuro].append({
+            bill_futuro = _mes_seguinte(bill_raw, i)
+            mes_pagamento_futuro = _mes_seguinte(bill_futuro, 1)
+            despesas_cartao_por_pagamento[mes_pagamento_futuro].append({
                 "id": t.get("id"),
                 "descricao": descricao,
                 "categoria": categoria_pt,
@@ -214,7 +228,8 @@ def construir_panorama_mensal(
                 "parcela": f"{atual_parc + i}/{total_parc}",
             })
 
-    meses_ordenados = [mes_atual] + [_mes_seguinte(mes_atual, i) for i in range(1, meses_futuros + 1)]
+    mes_pagamento_atual = _mes_seguinte(mes_atual, 1)
+    meses_ordenados = [mes_pagamento_atual] + [_mes_seguinte(mes_pagamento_atual, i) for i in range(1, meses_futuros + 1)]
 
     linhas = []
     caixa_inicio = saldo
@@ -222,7 +237,7 @@ def construir_panorama_mensal(
         fixas_itens = _fixas_do_mes(mes, gastos_fixos_por_mes)
         fixas_total = sum(it["valor"] for it in fixas_itens)
 
-        variaveis_itens = variaveis_atual if i == 0 else detalhe_futuro.get(mes, [])
+        variaveis_itens = list(despesas_cartao_por_pagamento.get(mes, []))
         manuais_mes = [
             {**it, "categoria_grande": it["categoria"]}
             for it in (variaveis_manuais_por_mes or {}).get(mes, [])

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 import sync
 import telegram_diario
 
-HORARIO_DIARIO = "08:00"  # HH:MM, horário local do container/servidor
+HORARIO_DIARIO = "20:00"  # HH:MM, horário local do container/servidor -- fim do dia (pedido do usuário em 2026-07-25, era 08:00)
 
 
 def proxima_execucao() -> datetime:

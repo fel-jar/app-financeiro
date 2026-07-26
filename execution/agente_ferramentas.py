@@ -1,0 +1,248 @@
+"""Ferramentas (function calling) que o agente conversacional do Telegram
+pode chamar -- cada uma é uma função Python determinística que lê/escreve
+no banco (mesma fonte de verdade do dashboard). O LLM só decide QUAL
+ferramenta chamar e com quais argumentos; toda lógica de data, categoria e
+persistência fica em código, não no modelo (mesmo princípio de sempre
+neste projeto: empurrar a complexidade pro determinístico).
+
+Cada ferramenta devolve um dict JSON-serializável -- vira o resultado que
+o LLM lê pra formular a resposta final em português pro usuário.
+"""
+from datetime import date, timedelta
+
+import db
+from categorias_grandes import GRANDES_CATEGORIAS, grande_categoria
+from dados_db import (
+    carregar_caixa_externo, carregar_gastos_fixos_do_banco,
+    carregar_transacoes_do_banco, carregar_variaveis_manuais_do_banco,
+)
+from gerar_dashboard import MESES_PT, construir_panorama_mensal
+from normalizacao import traduzir_categoria
+
+CATEGORIAS_VALIDAS = sorted(GRANDES_CATEGORIAS.keys()) + ["Outros"]
+LIMITE_ITENS = 30
+
+
+def _intervalo_periodo(periodo: str, data_inicio: str | None, data_fim: str | None) -> tuple[str, str] | dict:
+    hoje = date.today()
+    if periodo == "hoje":
+        return hoje.isoformat(), hoje.isoformat()
+    if periodo == "ontem":
+        d = hoje - timedelta(days=1)
+        return d.isoformat(), d.isoformat()
+    if periodo == "esta_semana":
+        inicio = hoje - timedelta(days=hoje.weekday())
+        return inicio.isoformat(), hoje.isoformat()
+    if periodo == "mes_atual":
+        return hoje.replace(day=1).isoformat(), hoje.isoformat()
+    if periodo == "mes_passado":
+        primeiro_atual = hoje.replace(day=1)
+        ultimo_passado = primeiro_atual - timedelta(days=1)
+        return ultimo_passado.replace(day=1).isoformat(), ultimo_passado.isoformat()
+    if periodo == "personalizado":
+        if not data_inicio or not data_fim:
+            return {"erro": "periodo 'personalizado' exige data_inicio e data_fim (YYYY-MM-DD)."}
+        return data_inicio, data_fim
+    return {"erro": f"periodo inválido: {periodo!r}. Use hoje/ontem/esta_semana/mes_atual/mes_passado/personalizado."}
+
+
+def consultar_gastos(
+    periodo: str,
+    data_inicio: str | None = None,
+    data_fim: str | None = None,
+    descricao_contem: str | None = None,
+    categoria_grande: str | None = None,
+    forma: str | None = None,
+) -> dict:
+    """Total gasto, breakdown por categoria e lista de lançamentos (com
+    `id`, pra edição posterior) num período. `periodo` resolve a data de
+    forma determinística em Python -- o modelo nunca precisa calcular
+    "ontem" ou "mês passado" sozinho."""
+    intervalo = _intervalo_periodo(periodo, data_inicio, data_fim)
+    if isinstance(intervalo, dict):
+        return intervalo
+    inicio, fim = intervalo
+
+    with db.sessao() as conexao:
+        linhas = conexao.execute(
+            """SELECT id, date, COALESCE(description_custom, description) AS descricao,
+                      category, amount, account_type, categoria_grande_custom
+               FROM transacoes
+               WHERE substr(date, 1, 10) BETWEEN ? AND ? AND amount < 0
+               ORDER BY date DESC""",
+            (inicio, fim),
+        ).fetchall()
+
+    itens = []
+    por_categoria: dict = {}
+    for r in linhas:
+        categoria_pt = traduzir_categoria(r["category"] or "Outros")
+        grande = r["categoria_grande_custom"] or grande_categoria(categoria_pt)
+        forma_item = "cartao" if r["account_type"] == "CREDIT" else "pix"
+        if categoria_grande and grande != categoria_grande:
+            continue
+        if forma and forma_item != forma:
+            continue
+        if descricao_contem and descricao_contem.lower() not in (r["descricao"] or "").lower():
+            continue
+        valor = abs(r["amount"])
+        por_categoria[grande] = por_categoria.get(grande, 0.0) + valor
+        itens.append({
+            "id": r["id"],
+            "data": r["date"][:10],
+            "descricao": r["descricao"],
+            "categoria": grande,
+            "categoria_fina": categoria_pt,
+            "forma": forma_item,
+            "valor": round(valor, 2),
+        })
+
+    total = sum(i["valor"] for i in itens)
+    return {
+        "periodo": {"inicio": inicio, "fim": fim},
+        "total_despesas": round(total, 2),
+        "quantidade": len(itens),
+        "por_categoria": [
+            {"categoria": c, "total": round(v, 2)}
+            for c, v in sorted(por_categoria.items(), key=lambda kv: -kv[1])
+        ],
+        "itens": itens[:LIMITE_ITENS],
+        "itens_omitidos": max(0, len(itens) - LIMITE_ITENS),
+    }
+
+
+def editar_transacao(
+    transacao_id: str,
+    nova_descricao: str | None = None,
+    nova_categoria_grande: str | None = None,
+) -> dict:
+    """Renomeia e/ou recategoriza uma transação real (nunca apaga nem
+    altera valor/data -- só a descrição customizada e a grande categoria,
+    mesmos campos que a edição manual no dashboard usa)."""
+    if nova_categoria_grande and nova_categoria_grande not in CATEGORIAS_VALIDAS:
+        return {"erro": f"categoria inválida: {nova_categoria_grande!r}. Use uma de: {', '.join(CATEGORIAS_VALIDAS)}."}
+    if not nova_descricao and not nova_categoria_grande:
+        return {"erro": "informe nova_descricao e/ou nova_categoria_grande."}
+
+    with db.sessao() as conexao:
+        antes = conexao.execute(
+            """SELECT COALESCE(description_custom, description) AS descricao, category,
+                      categoria_grande_custom, amount, date
+               FROM transacoes WHERE id = ?""",
+            (transacao_id,),
+        ).fetchone()
+        if antes is None:
+            return {"erro": f"transação {transacao_id!r} não encontrada."}
+
+        categoria_antes = antes["categoria_grande_custom"] or grande_categoria(traduzir_categoria(antes["category"] or "Outros"))
+
+        if nova_descricao:
+            conexao.execute("UPDATE transacoes SET description_custom = ? WHERE id = ?", (nova_descricao, transacao_id))
+        if nova_categoria_grande:
+            conexao.execute("UPDATE transacoes SET categoria_grande_custom = ? WHERE id = ?", (nova_categoria_grande, transacao_id))
+
+    return {
+        "sucesso": True,
+        "id": transacao_id,
+        "antes": {"descricao": antes["descricao"], "categoria": categoria_antes},
+        "depois": {
+            "descricao": nova_descricao or antes["descricao"],
+            "categoria": nova_categoria_grande or categoria_antes,
+        },
+    }
+
+
+def consultar_painel_mensal() -> dict:
+    """Painel mês a mês (mesmo cálculo do dashboard): a partir do mês em
+    que a fatura que está fechando agora é paga, fixas/variáveis/caixa
+    projetado e se cobre ou não, mês a mês."""
+    transacoes, saldo = carregar_transacoes_do_banco()
+    gastos_fixos_por_mes = carregar_gastos_fixos_do_banco()
+    variaveis_manuais_por_mes = carregar_variaveis_manuais_do_banco()
+    caixa_externo = carregar_caixa_externo()
+    saldo_com_externo = None if saldo is None else saldo + caixa_externo
+
+    panorama = construir_panorama_mensal(transacoes, saldo_com_externo, gastos_fixos_por_mes, variaveis_manuais_por_mes)
+    meses = []
+    for linha in panorama:
+        meses.append({
+            "mes": linha["mes"],
+            "mes_label": f"{MESES_PT[int(linha['mes'][5:7]) - 1]}/{linha['mes'][2:4]}",
+            "caixa_inicio": linha["caixa_inicio"],
+            "entrada_prevista": round(linha["entrada"], 2),
+            "fixas_total": round(linha["fixas_total"], 2),
+            "variaveis_total": round(linha["variaveis_total"], 2),
+            "despesas_totais": round(linha["necessario"], 2),
+            "saldo_final": linha["saldo_final"],
+            "cobre": linha["cobre"],
+        })
+    return {"hoje": date.today().isoformat(), "meses": meses}
+
+
+FERRAMENTAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "consultar_gastos",
+            "description": (
+                "Consulta despesas reais (Pix e cartão) num período: total gasto, "
+                "breakdown por categoria e a lista de lançamentos individuais (cada "
+                "um com 'id', necessário pra chamar editar_transacao depois)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "periodo": {
+                        "type": "string",
+                        "enum": ["hoje", "ontem", "esta_semana", "mes_atual", "mes_passado", "personalizado"],
+                        "description": "Período a consultar. Use 'personalizado' + data_inicio/data_fim pra um intervalo específico.",
+                    },
+                    "data_inicio": {"type": "string", "description": "YYYY-MM-DD, só quando periodo='personalizado'."},
+                    "data_fim": {"type": "string", "description": "YYYY-MM-DD, só quando periodo='personalizado'."},
+                    "descricao_contem": {"type": "string", "description": "Filtra por parte da descrição da compra (ex: 'uber', 'carrefour')."},
+                    "categoria_grande": {"type": "string", "enum": CATEGORIAS_VALIDAS, "description": "Filtra por uma grande categoria."},
+                    "forma": {"type": "string", "enum": ["pix", "cartao"], "description": "Filtra por forma de pagamento."},
+                },
+                "required": ["periodo"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "editar_transacao",
+            "description": (
+                "Renomeia e/ou recategoriza uma transação real já encontrada via "
+                "consultar_gastos (usa o 'id' dela). Nunca apaga a transação nem "
+                "altera valor/data -- só a descrição customizada e a grande categoria."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "transacao_id": {"type": "string", "description": "id da transação, obtido em consultar_gastos."},
+                    "nova_descricao": {"type": "string", "description": "Nova descrição/nome pra essa compra."},
+                    "nova_categoria_grande": {"type": "string", "enum": CATEGORIAS_VALIDAS, "description": "Nova grande categoria."},
+                },
+                "required": ["transacao_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "consultar_painel_mensal",
+            "description": (
+                "Painel mês a mês: caixa no início do mês, entrada prevista, "
+                "despesas totais (fixas + variáveis) e se cobre ou não, a partir do "
+                "mês em que a fatura de cartão que está fechando agora será paga."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+]
+
+EXECUTORES = {
+    "consultar_gastos": consultar_gastos,
+    "editar_transacao": editar_transacao,
+    "consultar_painel_mensal": consultar_painel_mensal,
+}

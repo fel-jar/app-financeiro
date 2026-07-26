@@ -75,6 +75,35 @@ services:
       mode: replicated
       replicas: 1
 
+  agente:
+    image: ghcr.io/PREENCHER_USUARIO/PREENCHER_REPO:latest
+
+    networks:
+      - network_swarm_public
+
+    # Long polling no Telegram -- processo próprio, sempre rodando (não é
+    # 1x/dia como o scheduler). replicas DEVE ficar em 1: 2 réplicas
+    # disputariam o mesmo getUpdates/offset e responderiam a mensagem
+    # duplicada.
+    command: python agente_llm.py
+
+    environment:
+      PLUGGY_CLIENT_ID: "PREENCHER"
+      PLUGGY_CLIENT_SECRET: "PREENCHER"
+      PLUGGY_ITEM_ID: "PREENCHER"
+      TELEGRAM_BOT_TOKEN: "PREENCHER"
+      TELEGRAM_CHAT_ID: "PREENCHER"
+      OPENROUTER_API_KEY: "PREENCHER"
+      OPENROUTER_MODEL: "deepseek/deepseek-v4-pro"
+      APP_FINANCEIRO_DB: "/app/dados/app_financeiro.db"
+
+    volumes:
+      - dados:/app/dados
+
+    deploy:
+      mode: replicated
+      replicas: 1
+
 volumes:
   dados:
 

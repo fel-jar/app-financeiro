@@ -8,6 +8,7 @@ Isso é o que permite edição persistente (descrição de compra, valor de
 gasto fixo por mês, orçamento por categoria) -- um HTML estático gerado do
 zero não tinha como guardar nada.
 """
+import json
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -76,6 +77,15 @@ CREATE TABLE IF NOT EXISTS meta (
     chave TEXT PRIMARY KEY,
     valor TEXT
 );
+
+CREATE TABLE IF NOT EXISTS agente_mensagens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id TEXT NOT NULL,
+    mensagem TEXT NOT NULL,
+    criado_em TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agente_mensagens_chat ON agente_mensagens(chat_id, id);
 """
 
 
@@ -140,6 +150,25 @@ def definir_meta(conexao: sqlite3.Connection, chave: str, valor: str):
         """INSERT INTO meta (chave, valor) VALUES (?, ?)
            ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor""",
         (chave, valor),
+    )
+
+
+def carregar_mensagens_agente(conexao: sqlite3.Connection, chat_id: str, limite: int) -> list[dict]:
+    """Últimas `limite` mensagens da conversa com o agente (formato OpenAI:
+    role/content/tool_calls/tool_call_id), pra dar contexto ao LLM entre
+    reinícios do processo (redeploy, restart do container)."""
+    linhas = conexao.execute(
+        """SELECT mensagem FROM agente_mensagens WHERE chat_id = ?
+           ORDER BY id DESC LIMIT ?""",
+        (chat_id, limite),
+    ).fetchall()
+    return [json.loads(r["mensagem"]) for r in reversed(linhas)]
+
+
+def gravar_mensagem_agente(conexao: sqlite3.Connection, chat_id: str, mensagem: dict, agora: str):
+    conexao.execute(
+        "INSERT INTO agente_mensagens (chat_id, mensagem, criado_em) VALUES (?, ?, ?)",
+        (chat_id, json.dumps(mensagem, ensure_ascii=False), agora),
     )
 
 

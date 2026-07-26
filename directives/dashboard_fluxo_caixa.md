@@ -639,3 +639,52 @@ coluna via `ALTER TABLE` idempotente dentro de `db.inicializar()` (ver
 de `Mercado`/`Combustível` já semeadas em meses anteriores foram apagadas
 manualmente (`DELETE FROM gastos_fixos WHERE nome IN (...)`), tanto local
 quanto na VPS -- não vão voltar porque saíram de `GASTOS_FIXOS`.
+
+## Status atual (2026-07-25) — Painel reancorado no mês de PAGAMENTO da fatura
+
+Bug reportado pelo usuário: o painel mostrava o gasto de cartão agrupado
+pela data da COMPRA (mês do calendário), não pelo mês em que a fatura é de
+fato PAGA. Ex.: uma compra feita em julho aparecia no card "Julho", mas o
+usuário só paga essa fatura em agosto -- o card errado ficava
+superestimado/subestimado e o "cobre/não cobre" saía errado. Corrigido em
+`construir_panorama_mensal()` (`execution/gerar_dashboard.py`):
+
+- **Achado importante sobre `billForecastDate`**: testado contra o banco
+  real em 2026-07-25 -- a Pluggy nomeia a fatura pelo mês de
+  FECHAMENTO/referência, não pelo mês em que ela é paga (ex.: compras de
+  jun/26 e jul/26 vieram todas com `billForecastDate = "2026-07"`, e o
+  usuário confirmou que essa fatura só é paga em agosto). Por isso todo
+  `billForecastDate` é deslocado **+1 mês** (`_mes_seguinte(bill, 1)`)
+  antes de virar chave do painel -- é isso que faz "julho" da Pluggy virar
+  o card "Agosto" no painel.
+- **Achado crítico -- `billForecastDate` vem `NULL` com frequência nos
+  dados reais**: testado contra o banco em 2026-07-25, transações de
+  cartão de abril/26 (65 de 227), maio/26 (227 de 227) e junho/26 (171 de
+  235) têm `billForecastDate` nulo mesmo sendo despesa real (`type=DEBIT`).
+  A primeira versão da correção (`bill = meta.get("billForecastDate")`
+  puro, sem fallback) **sumia silenciosamente com essas despesas** do
+  painel -- regressão pior que o bug original. Corrigido com fallback:
+  `bill_raw = meta.get("billForecastDate") or t["date"][:7]` (cai de volta
+  na data da própria compra quando a Pluggy não informa a fatura).
+- **Painel deixou de mostrar o mês corrente do calendário**: a pedido do
+  usuário ("não quero saber da projeção do passado mês a mês, quero só o
+  que vou pagar de agosto pra frente"), o primeiro card do painel agora é
+  `_mes_seguinte(mes_atual, 1)` (o mês de pagamento da fatura que está
+  fechando agora), não mais o mês corrente do calendário. "Caixa no início
+  do mês" desse primeiro card é o **saldo real de hoje** (`saldo` recebido
+  direto da conta via Pluggy), não mais uma projeção arrastada a partir de
+  um card "mês atual" fictício -- testado em 2026-07-25: caixa de início
+  batendo com o saldo real (R$19.680,08).
+- **Variáveis do mês atual deixaram de existir como conceito separado**:
+  antes havia uma lista `variaveis_atual` (Pix + cartão do mês corrente
+  filtrados pela data). Como o painel não mostra mais o mês corrente, essa
+  lista foi removida -- gasto Pix que já aconteceu neste mês já está
+  refletido no saldo real (contá-lo de novo duplicaria). Toda despesa de
+  cartão (inclusive a da fatura que está fechando agora) passa pelo mesmo
+  fluxo de projeção por fatura (`despesas_cartao_por_pagamento`), e função
+  `transacoes_mes_atual()` (não usada em mais nenhum lugar) foi removida.
+- Fixas continuam pelo mês de calendário real (sem deslocamento) -- contas
+  fixas em Pix (aluguel, condomínio, financiamento) já são pagas no
+  próprio mês de calendário, e as fixas de cartão convertidas via "→ fixo"
+  já são semeadas por `MESES_SEED_FIXOS` a partir do mês de calendário
+  real; não têm o mesmo problema de nomeação de fatura que as Variáveis.

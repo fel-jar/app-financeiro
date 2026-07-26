@@ -28,5 +28,17 @@ services:
       - .env
     restart: unless-stopped
 
+  agente:
+    image: app-financeiro:latest
+    build: .
+    command: python agente_llm.py
+    volumes:
+      - dados:/app/dados
+    environment:
+      - APP_FINANCEIRO_DB=/app/dados/app_financeiro.db
+    env_file:
+      - .env
+    restart: unless-stopped
+
 volumes:
   dados:
