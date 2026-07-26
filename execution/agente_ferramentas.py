@@ -8,9 +8,11 @@ neste projeto: empurrar a complexidade pro determinístico).
 Cada ferramenta devolve um dict JSON-serializável -- vira o resultado que
 o LLM lê pra formular a resposta final em português pro usuário.
 """
-from datetime import date, timedelta
+import os
+from datetime import date, datetime, timedelta
 
 import db
+import sync
 from categorias_grandes import GRANDES_CATEGORIAS, grande_categoria
 from dados_db import (
     carregar_caixa_externo, carregar_gastos_fixos_do_banco,
@@ -18,6 +20,7 @@ from dados_db import (
 )
 from gerar_dashboard import MESES_PT, construir_panorama_mensal
 from normalizacao import traduzir_categoria
+from pluggy_client import from_env as pluggy_from_env
 
 CATEGORIAS_VALIDAS = sorted(GRANDES_CATEGORIAS.keys()) + ["Outros"]
 LIMITE_ITENS = 30
@@ -179,6 +182,36 @@ def consultar_painel_mensal() -> dict:
     return {"hoje": date.today().isoformat(), "meses": meses}
 
 
+def sincronizar_agora() -> dict:
+    """Sincroniza AGORA com a Pluggy (fora do horário fixo do scheduler) --
+    mesma rotina de sync.main(), só que devolve um resultado em vez de
+    imprimir/sair do processo. Usa as mesmas credenciais Pluggy já
+    presentes no ambiente do container do agente."""
+    cliente = pluggy_from_env()
+    item_id = os.getenv("PLUGGY_ITEM_ID")
+    if cliente is None or not item_id:
+        return {"erro": "faltam credenciais da Pluggy no ambiente (PLUGGY_CLIENT_ID/SECRET/ITEM_ID)."}
+
+    try:
+        with db.sessao() as conexao:
+            transacoes = sync.sincronizar_transacoes_e_contas(conexao, cliente, item_id)
+
+            item_id_esposa = os.getenv("PLUGGY_ITEM_ID_ESPOSA")
+            if item_id_esposa:
+                transacoes += sync.sincronizar_cartao_apenas_credito(conexao, cliente, item_id_esposa)
+
+            sync.seed_gastos_fixos(conexao)
+            sync.seed_orcamento_categoria(conexao, transacoes)
+    except Exception as e:
+        return {"erro": f"falha ao sincronizar com a Pluggy: {e}"}
+
+    return {
+        "sucesso": True,
+        "transacoes_sincronizadas": len(transacoes),
+        "sincronizado_em": datetime.now().isoformat(),
+    }
+
+
 FERRAMENTAS = [
     {
         "type": "function",
@@ -239,10 +272,24 @@ FERRAMENTAS = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "sincronizar_agora",
+            "description": (
+                "Sincroniza AGORA com a Pluggy (fora do horário fixo diário) -- busca "
+                "transações e saldos novos e atualiza o banco. Use quando o usuário pedir "
+                "explicitamente pra atualizar/sincronizar os dados na hora. Pode levar "
+                "alguns segundos."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]
 
 EXECUTORES = {
     "consultar_gastos": consultar_gastos,
     "editar_transacao": editar_transacao,
     "consultar_painel_mensal": consultar_painel_mensal,
+    "sincronizar_agora": sincronizar_agora,
 }

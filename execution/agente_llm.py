@@ -61,7 +61,10 @@ def _system_prompt() -> str:
         "depois).\n"
         f"- Grande categoria só pode ser uma destas: {', '.join(CATEGORIAS_VALIDAS)}.\n"
         "- Perguntas sobre 'o mês fecha', 'dá pra cobrir', projeção de caixa -> use "
-        "consultar_painel_mensal."
+        "consultar_painel_mensal.\n"
+        "- Se pedirem pra atualizar/sincronizar os dados agora (fora do horário fixo "
+        "diário), use sincronizar_agora -- avise que pode levar alguns segundos antes de "
+        "chamar, e confirme quantas transações vieram depois."
     )
 
 
