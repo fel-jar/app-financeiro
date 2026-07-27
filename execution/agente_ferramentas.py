@@ -203,6 +203,9 @@ def sincronizar_agora() -> dict:
             if item_id_esposa:
                 transacoes += sync.sincronizar_cartao_apenas_credito(conexao, cliente, item_id_esposa)
 
+            for item_id_extra in sync.itens_extras_do_env():
+                transacoes += sync.sincronizar_transacoes_e_contas(conexao, cliente, item_id_extra)
+
             sync.seed_gastos_fixos(conexao)
             sync.seed_orcamento_categoria(conexao, transacoes)
     except Exception as e:

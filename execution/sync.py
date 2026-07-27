@@ -72,6 +72,15 @@ def _gravar_transacoes(conexao, transacoes: list[dict], tipo_conta_por_id: dict,
         )
 
 
+def itens_extras_do_env() -> list[str]:
+    """Item IDs de contas adicionais (ex.: outros bancos/cartões próprios do
+    usuário), sincronizadas por completo -- diferente do item da esposa, que
+    só traz o cartão. Formato no .env: PLUGGY_ITEM_IDS_EXTRAS separados por
+    vírgula, pra não precisar mexer no código a cada nova conta conectada."""
+    bruto = os.getenv("PLUGGY_ITEM_IDS_EXTRAS", "")
+    return [item.strip() for item in bruto.split(",") if item.strip()]
+
+
 def sincronizar_transacoes_e_contas(conexao, cliente, item_id: str) -> list[dict]:
     transacoes, _ = normalizar_transacoes_pluggy(cliente, item_id)
     agora = datetime.now().isoformat()
@@ -203,6 +212,9 @@ def main():
         item_id_esposa = os.getenv("PLUGGY_ITEM_ID_ESPOSA")
         if item_id_esposa:
             transacoes += sincronizar_cartao_apenas_credito(conexao, cliente, item_id_esposa)
+
+        for item_id_extra in itens_extras_do_env():
+            transacoes += sincronizar_transacoes_e_contas(conexao, cliente, item_id_extra)
 
         seed_gastos_fixos(conexao)
         seed_orcamento_categoria(conexao, transacoes)

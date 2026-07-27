@@ -405,9 +405,11 @@ sync.py ──────────► SQLite (dados/app_financeiro.db)
 3. Avaliar se a categoria "Automotive" (R$65.000 em ago/2025) é uma compra
    real pontual (carro/consórcio) ou merece tratamento como parcelamento —
    confirmar com o usuário se aparecer de novo em outro mês.
-4. Se o usuário conectar outro banco/cartão fora do Bradesco, repetir o
+4. ~~Se o usuário conectar outro banco/cartão fora do Bradesco, repetir o
    fluxo do meu.pluggy.ai e adicionar o novo item (múltiplos items por
-   `.env` ainda não suportado — hoje só lê `PLUGGY_ITEM_ID` único).
+   `.env` ainda não suportado — hoje só lê `PLUGGY_ITEM_ID` único).~~
+   Resolvido em 2026-07-27: ver "Contas extras (Nubank, Mercado Pago...)"
+   mais abaixo.
 
 ## Status atual (2026-07-23) — EM PRODUÇÃO NA VPS
 
@@ -629,6 +631,23 @@ Testado contra a API real em 2026-07-25: `Caixa disponível` ficou
 inalterado (R$ 19.680,08 antes/depois), só a conta CREDIT "ELO NANQUIM
 PRIME" entrou (87 transações reais de julho/26, R$ 7.534,92) -- validado
 local e depois em produção via `docker exec`.
+
+### Contas extras (Nubank, Mercado Pago...) -- sincronização completa (2026-07-27)
+Diferente da esposa (só cartão, pra não dobrar saldo de conta compartilhada),
+uma conta nova do próprio usuário deve ser sincronizada por inteiro (conta +
+cartão). Em vez de criar uma variável de ambiente fixa por conta (não escala),
+`PLUGGY_ITEM_IDS_EXTRAS` no `.env` aceita uma lista de Item IDs separados por
+vírgula. `sync.itens_extras_do_env()` faz o parse; `sync.main()` e
+`agente_ferramentas.sincronizar_agora()` iteram a lista chamando
+`sincronizar_transacoes_e_contas()` (sync completo) pra cada item -- mesmo
+tratamento do item principal, só que em loop.
+
+Fluxo pra conectar uma conta nova: repetir o processo do
+`gerar_link_conexao.py`/meu.pluggy.ai, pegar o Item ID novo, e acrescentar
+na lista de `PLUGGY_ITEM_IDS_EXTRAS` (não precisa mexer em código de novo).
+
+Itens atuais: Mercado Pago (`08abf7ce-6927-4d98-ae6e-5ace7b652962`) e Nubank
+(`bb6e2aee-7317-47a1-9701-0569ee578ae0`), adicionados em 2026-07-27.
 
 ### Migração de schema
 `gastos_fixos` ganhou a coluna `categoria` (grande categoria, pra
