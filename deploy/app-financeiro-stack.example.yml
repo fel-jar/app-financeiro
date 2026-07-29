@@ -70,6 +70,8 @@ services:
       PLUGGY_ITEM_IDS_EXTRAS: "PREENCHER (opcional -- lista separada por vírgula de outras contas)"
       TELEGRAM_BOT_TOKEN: "PREENCHER"
       TELEGRAM_CHAT_ID: "PREENCHER"
+      EMAIL_IMAP_USER: "PREENCHER (opcional -- checagem de compra pendente por e-mail, ver email_pendente.py)"
+      EMAIL_IMAP_APP_PASSWORD: "PREENCHER (opcional -- senha de app do Gmail, não a senha normal)"
       APP_FINANCEIRO_DB: "/app/dados/app_financeiro.db"
 
     volumes:
