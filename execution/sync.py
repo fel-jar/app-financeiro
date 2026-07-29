@@ -72,6 +72,64 @@ def _gravar_transacoes(conexao, transacoes: list[dict], tipo_conta_por_id: dict,
         )
 
 
+JANELA_RECONCILIACAO_DIAS = 4  # emissor do cartão leva 1-3 dias pra liquidar (ver directives/agente_telegram.md)
+
+
+def reconciliar_pendentes_email(conexao):
+    """Casa cada transação PENDENTE (vinda de email_pendente.py) com a
+    transação oficial equivalente que acabou de chegar da Pluggy -- por
+    valor exato + data próxima (a Pluggy pode postar com a data real da
+    compra, diferente da data em que o e-mail chegou).
+
+    Quando casa: herda description_custom/categoria_grande_custom que o
+    usuário já tiver corrigido na pendente (senão a correção feita via
+    Telegram enquanto a compra ainda não tinha confirmação oficial seria
+    perdida) e apaga a linha pendente -- sem isso a mesma compra contaria
+    duas vezes (uma vinda do e-mail, outra da Pluggy, ids diferentes)."""
+    pendentes = conexao.execute(
+        """SELECT id, date, amount, description_custom, categoria_grande_custom
+           FROM transacoes WHERE status = 'pendente'"""
+    ).fetchall()
+    if not pendentes:
+        return 0
+
+    candidatas = conexao.execute(
+        """SELECT id, date, amount FROM transacoes
+           WHERE status = 'confirmada' AND amount < 0"""
+    ).fetchall()
+
+    usadas = set()
+    reconciliadas = 0
+    for pendente in pendentes:
+        data_pendente = pendente["date"][:10]
+        melhor = None
+        for c in candidatas:
+            if c["id"] in usadas:
+                continue
+            if abs(c["amount"] - pendente["amount"]) >= 0.01:
+                continue
+            if abs((datetime.fromisoformat(c["date"][:10]) - datetime.fromisoformat(data_pendente)).days) > JANELA_RECONCILIACAO_DIAS:
+                continue
+            melhor = c
+            break
+        if melhor is None:
+            continue
+
+        usadas.add(melhor["id"])
+        if pendente["description_custom"] or pendente["categoria_grande_custom"]:
+            conexao.execute(
+                """UPDATE transacoes SET
+                     description_custom = COALESCE(?, description_custom),
+                     categoria_grande_custom = COALESCE(?, categoria_grande_custom)
+                   WHERE id = ?""",
+                (pendente["description_custom"], pendente["categoria_grande_custom"], melhor["id"]),
+            )
+        conexao.execute("DELETE FROM transacoes WHERE id = ?", (pendente["id"],))
+        reconciliadas += 1
+
+    return reconciliadas
+
+
 def itens_extras_do_env() -> list[str]:
     """Item IDs de contas adicionais (ex.: outros bancos/cartões próprios do
     usuário), sincronizadas por completo -- diferente do item da esposa, que
@@ -218,8 +276,12 @@ def main():
 
         seed_gastos_fixos(conexao)
         seed_orcamento_categoria(conexao, transacoes)
+        reconciliadas = reconciliar_pendentes_email(conexao)
 
-    print(f"Sincronizado: {len(transacoes)} transações em {db.DB_PATH}")
+    msg = f"Sincronizado: {len(transacoes)} transações em {db.DB_PATH}"
+    if reconciliadas:
+        msg += f" ({reconciliadas} pendente(s) de e-mail reconciliada(s) com a Pluggy)"
+    print(msg)
 
 
 if __name__ == "__main__":

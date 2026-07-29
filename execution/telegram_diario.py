@@ -43,7 +43,7 @@ def montar_resumo_diario() -> str:
 
     with db.sessao() as conexao:
         gastos_hoje = conexao.execute(
-            """SELECT COALESCE(description_custom, description) AS descricao, category, amount
+            """SELECT COALESCE(description_custom, description) AS descricao, category, amount, status
                FROM transacoes WHERE date LIKE ? AND amount < 0
                ORDER BY amount ASC""",
             (f"{hoje}%",),
@@ -68,6 +68,10 @@ def montar_resumo_diario() -> str:
             (f"{mes_atual}%",),
         ).fetchone()["total"]
 
+        pendentes_em_aberto = conexao.execute(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(-amount), 0) AS total FROM transacoes WHERE status = 'pendente'"
+        ).fetchone()
+
         caixa = conexao.execute(
             "SELECT COALESCE(SUM(balance), 0) AS total FROM contas WHERE account_type = 'BANK'"
         ).fetchone()["total"]
@@ -78,9 +82,17 @@ def montar_resumo_diario() -> str:
     if not gastos_hoje:
         linhas.append("Nenhum gasto registrado hoje.")
     else:
+        # Total e breakdown por categoria contam TUDO (confirmado + pendente
+        # de e-mail) -- é o que realmente saiu do bolso hoje. Pendente só é
+        # sinalizado por transação (a Pluggy ainda não confirmou aquela
+        # compra, mas o dinheiro já foi gasto). Ver directives/agente_telegram.md,
+        # seção 2026-07-29, sobre por que o gasto de hoje sem essa fonte
+        # ficava sistematicamente subestimado (atraso de liquidação do cartão).
         por_categoria_hoje: dict = defaultdict(float)
+        tem_pendente_hoje = False
         for g in gastos_hoje:
             por_categoria_hoje[g["category"] or "Outros"] += abs(g["amount"])
+            tem_pendente_hoje = tem_pendente_hoje or g["status"] == "pendente"
 
         linhas.append(f"💳 Gasto de hoje: {fmt_brl(sum(por_categoria_hoje.values()))}")
         for cat, valor_hoje in por_categoria_hoje.items():
@@ -96,6 +108,16 @@ def montar_resumo_diario() -> str:
                 )
             else:
                 linhas.append(f"   • {cat_pt}: {fmt_brl(valor_hoje)} hoje (sem orçamento definido pra essa categoria)")
+
+        if tem_pendente_hoje:
+            linhas.append("   ⚠️ inclui compra(s) só detectada(s) por e-mail, ainda não confirmada(s) pelo banco.")
+
+    if pendentes_em_aberto["n"]:
+        linhas.append("")
+        linhas.append(
+            f"🕓 {pendentes_em_aberto['n']} compra(s) aguardando confirmação da Pluggy "
+            f"({fmt_brl(pendentes_em_aberto['total'])} no total, pode incluir dias anteriores)."
+        )
 
     linhas.append("")
     linhas.append(f"💰 Caixa disponível: {fmt_brl(caixa)}")

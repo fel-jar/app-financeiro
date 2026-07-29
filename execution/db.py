@@ -32,8 +32,12 @@ CREATE TABLE IF NOT EXISTS transacoes (
     installment_current INTEGER,
     installment_total INTEGER,
     bill_forecast_date TEXT,
-    synced_at TEXT NOT NULL
+    synced_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'confirmada',
+    origem TEXT NOT NULL DEFAULT 'pluggy'
 );
+
+CREATE INDEX IF NOT EXISTS idx_transacoes_status ON transacoes(status);
 
 CREATE INDEX IF NOT EXISTS idx_transacoes_date ON transacoes(date);
 CREATE INDEX IF NOT EXISTS idx_transacoes_bill ON transacoes(bill_forecast_date);
@@ -129,6 +133,12 @@ def _migrar(conexao: sqlite3.Connection):
     _adicionar_coluna_se_faltando(conexao, "gastos_fixos", "categoria", "TEXT")
     _adicionar_coluna_se_faltando(conexao, "gastos_fixos", "transacao_id_origem", "TEXT")
     _adicionar_coluna_se_faltando(conexao, "transacoes", "categoria_grande_custom", "TEXT")
+    # 2026-07-29: fonte "pendente" via e-mail (ver execution/email_pendente.py)
+    # -- toda linha que já existia vira 'confirmada'/'pluggy' (default do
+    # ALTER cobre isso sozinho, sem precisar de UPDATE explícito).
+    _adicionar_coluna_se_faltando(conexao, "transacoes", "status", "TEXT NOT NULL DEFAULT 'confirmada'")
+    _adicionar_coluna_se_faltando(conexao, "transacoes", "origem", "TEXT NOT NULL DEFAULT 'pluggy'")
+    conexao.execute("CREATE INDEX IF NOT EXISTS idx_transacoes_status ON transacoes(status)")
 
     # "Família e Saúde" foi separada em duas grandes categorias em
     # 2026-07-26 (pedido do usuário) -- linhas já semeadas com o nome

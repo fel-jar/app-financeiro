@@ -72,7 +72,7 @@ def consultar_gastos(
     with db.sessao() as conexao:
         linhas = conexao.execute(
             """SELECT id, date, COALESCE(description_custom, description) AS descricao,
-                      category, amount, account_type, categoria_grande_custom
+                      category, amount, account_type, categoria_grande_custom, status
                FROM transacoes
                WHERE substr(date, 1, 10) BETWEEN ? AND ? AND amount < 0
                ORDER BY date DESC""",
@@ -101,6 +101,7 @@ def consultar_gastos(
             "categoria_fina": categoria_pt,
             "forma": forma_item,
             "valor": round(valor, 2),
+            "status": r["status"],
         })
 
     total = sum(i["valor"] for i in itens)
@@ -208,6 +209,7 @@ def sincronizar_agora() -> dict:
 
             sync.seed_gastos_fixos(conexao)
             sync.seed_orcamento_categoria(conexao, transacoes)
+            sync.reconciliar_pendentes_email(conexao)
     except Exception as e:
         return {"erro": f"falha ao sincronizar com a Pluggy: {e}"}
 

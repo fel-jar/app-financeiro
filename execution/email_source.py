@@ -83,13 +83,20 @@ def buscar_transacoes(dias: int = 31) -> list[dict]:
     conexao.login(usuario, senha)
     conexao.select("INBOX")
 
+    # UID, não número de sequência: sequência reindexa toda vez que uma
+    # mensagem é apagada/movida na caixa, então o mesmo e-mail podia trocar
+    # de "id" de uma checagem pra outra -- com email_pendente.py rodando a
+    # cada 15min e usando esse id pra deduplicar no banco (INSERT OR IGNORE),
+    # isso reenviaria a mesma notificação de compra pro Telegram sem parar.
+    # UID é estável por mensagem enquanto o UIDVALIDITY da caixa não mudar
+    # (RFC 3501) -- o caso realista aqui.
     desde = (datetime.now() - timedelta(days=dias)).strftime("%d-%b-%Y")
-    _, dados = conexao.search(None, "SINCE", desde)
+    _, dados = conexao.uid("search", None, "SINCE", desde)
     ids = dados[0].split()
 
     transacoes = []
     for msg_id in ids:
-        _, msg_dados = conexao.fetch(msg_id, "(RFC822)")
+        _, msg_dados = conexao.uid("fetch", msg_id, "(RFC822)")
         corpo_bruto: bytes = msg_dados[0][1]  # type: ignore[index,assignment]
         msg = email.message_from_bytes(corpo_bruto)
         assunto = _decodificar(msg.get("Subject", ""))

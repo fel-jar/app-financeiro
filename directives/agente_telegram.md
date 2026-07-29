@@ -180,3 +180,112 @@ lado confiável.
 Dependência nova: `pdfplumber` no `requirements.txt`. Só
 `agente_llm`/`agente_ferramentas` importam — o app web não precisa dela
 pra subir.
+
+## Compras "pendentes" via e-mail em quase tempo real (2026-07-29)
+
+**Problema encontrado**: o resumo diário (`telegram_diario.py`, 20h) dizia
+"nenhum gasto registrado hoje" em dias que TIVERAM gasto real (ex.: 26/07,
+compras de R$ 177,23 e R$ 1.974,19 que só apareceram no banco dias
+depois). Causa: o emissor do cartão leva de 1 a 3 dias pra liquidar uma
+compra e só aí a Pluggy expõe a transação — já com a data retroativa da
+compra original. Um único sync/dia às 20h nunca vê o que ainda não
+liquidou, então o "gasto de hoje" estava sistematicamente subestimado (não
+é bug de query, é atraso estrutural da fonte de dados).
+
+**Ideia do usuário (proposta e aprovada em 2026-07-29)**: reaproveitar o
+canal de e-mail que já existia (`email_source.py`, notificações do app do
+Bradesco encaminhadas por MacroDroid) como fonte "quente" em PARALELO com
+a Pluggy, não só como fallback de quando ela falta:
+
+```
+MacroDroid → e-mail (Bradesco) ──► email_pendente.py (a cada 15min)
+                                         │ grava status='pendente'
+                                         ▼
+                                    transacoes (SQLite)
+                                         │ notifica Telegram
+                                         │ usuário pode corrigir nome/categoria
+                                         │ na hora (agente_llm já sabe editar
+                                         │ qualquer id, pendente ou não)
+                                         ▼
+sync.py (Pluggy, 1x/dia 20h) ──► reconciliar_pendentes_email()
+   grava a transação OFICIAL          casa por valor + data (±4 dias),
+                                       herda descrição/categoria que o
+                                       usuário já tiver corrigido, apaga
+                                       a linha pendente
+```
+
+**Schema**: `transacoes` ganhou `status` (`'confirmada'` default /
+`'pendente'`) e `origem` (`'pluggy'` default / `'email'`) — migração em
+`db._migrar` (`ALTER TABLE ... DEFAULT`, cobre linhas antigas sem UPDATE
+manual).
+
+- **`execution/email_pendente.py`**: `checar_email_pendente()` busca
+  e-mails dos últimos 2 dias (`email_source.buscar_transacoes`), insere
+  `INSERT OR IGNORE` (dedup pelo `id`) com `status='pendente'`,
+  `account_type='CREDIT'`, `account_id='cartao-final-XXXX'` (conta
+  "virtual" — sem linha correspondente em `contas`, mas nada no dashboard
+  faz JOIN por `account_id`, só `auditar_fatura_pdf` faz e usa contas
+  reais da Pluggy, não afeta). Manda um Telegram por compra nova.
+- **UID do IMAP, não número de sequência**: `email_source.buscar_transacoes`
+  foi corrigido pra usar `conexao.uid("search"/"fetch", ...)` em vez de
+  `conexao.search`/`conexao.fetch`. Número de sequência reindexa toda vez
+  que uma mensagem é apagada/movida — com a checagem rodando a cada 15min
+  e deduplicando pelo `id` no banco, um id instável faria a MESMA compra
+  ser tratada como nova e notificada de novo indefinidamente. UID é
+  estável (RFC 3501) enquanto o UIDVALIDITY da caixa não mudar.
+- **`sync.reconciliar_pendentes_email(conexao)`**: roda no fim de
+  `sync.main()` (e de `agente_ferramentas.sincronizar_agora`) — pra cada
+  pendente, procura uma confirmada com valor exatamente igual (tolerância
+  R$0,01) e data a até `JANELA_RECONCILIACAO_DIAS=4` dias de distância
+  (a Pluggy pode postar com a data real da compra, diferente do dia em
+  que o e-mail chegou). Ao casar: copia `description_custom`/
+  `categoria_grande_custom` da pendente pra confirmada (só se a pendente
+  tiver algo customizado — `COALESCE` preserva o que já existia na
+  confirmada senão) e DELETA a pendente. Isso evita dupla contagem (dois
+  `id`s diferentes pra mesma compra) e preserva correção feita via
+  Telegram enquanto a compra ainda estava pendente.
+- **Correção de categoria/nome**: não precisou de ferramenta nova —
+  `agente_ferramentas.editar_transacao` já edita qualquer `id` da tabela
+  `transacoes`, pendente ou confirmada, então "essa compra aí foi
+  categoria X" funciona igual, minutos depois da notificação chegar.
+- **`telegram_diario.py`**: o "gasto de hoje" agora soma confirmadas +
+  pendentes do dia (é o gasto real, não uma estimativa) e sinaliza com
+  "⚠️ inclui compra(s) só detectada(s) por e-mail" quando tem pendente
+  no meio; um rodapé mostra quantas pendentes seguem em aberto no total
+  (pode incluir dias anteriores que ainda não reconciliaram).
+- **`execution/telegram_semanal.py`** (novo): fechamento de domingo, só
+  `status='confirmada'` — é o número "de verdade" pra conferir contra
+  fatura/extrato (pedido do usuário: "no final da semana... fazer o
+  ratchet"). Roda dentro do `scheduler.rodar_ciclo_diario()` quando
+  `datetime.now().weekday() == 6`.
+- **`scheduler.py`**: reescrito de "dorme até o próximo 20h" pra um loop
+  de tick de 30s que checa dois relógios independentes — e-mail a cada
+  `INTERVALO_EMAIL_MINUTOS=15` e o ciclo diário (sync+resumo, +semanal aos
+  domingos) 1x/dia às `HORARIO_DIARIO`. Não precisou de container/serviço
+  novo no `docker-compose.yml`/`deploy/app-financeiro-stack.yml` — o
+  serviço `scheduler` que já existia agora faz as duas coisas.
+
+### Edge cases
+- **Pendente nunca reconcilia** (ex.: compra cancelada, estorno, ou não
+  bateu por descasamento de valor): fica pendente pra sempre e continua
+  aparecendo no rodapé do resumo diário — nenhuma limpeza automática
+  existe ainda. Se isso virar ruído no dia a dia, considerar expirar
+  pendente com mais de N dias (perguntar ao usuário antes de apagar
+  qualquer coisa).
+- **Duas compras iguais no mesmo dia** (mesmo valor, mesmo estabelecimento
+  — ex.: dois cafés de R$ 10 na padaria): a reconciliação casa a PRIMEIRA
+  confirmada disponível dentro da janela, não necessariamente a mesma
+  fisicamente — sem impacto no total (as duas continuam contando), só
+  risco cosmético de uma correção de nome/categoria feita numa pendente
+  "vazar" pra outra ocorrência do mesmo valor.
+- **IMAP indisponível/timeout**: `email_pendente.checar_email_pendente()`
+  deixa a exceção subir pra `scheduler.rodar_ciclo_email()`, que só loga e
+  segue — não derruba o processo nem atrasa o ciclo diário.
+
+### Pendente
+- Rodar de verdade em produção por alguns dias e conferir se a janela de
+  4 dias da reconciliação é suficiente (ou generosa demais) pro atraso
+  real do Bradesco.
+- Nenhum teste automatizado ainda — validado só por leitura de código
+  nesta sessão (sem credenciais de e-mail/Pluggy disponíveis pra rodar
+  fim-a-fim).
