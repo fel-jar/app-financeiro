@@ -606,6 +606,24 @@ sumir da projeção sem motivo. Consertado:
   Eles voltam a aparecer em Variáveis pra classificação manual via "→
   fixo" com vínculo exato.
 
+### Botão "→ fixo" sumia em compra parcelada no cartão (2026-07-29)
+Usuário reportou: compras parceladas no cartão (ex.: seguro de carro em
+12x, que depois será reparcelado de novo) não tinham a opção "→ tornar
+fixo" em Variáveis. Causa: `render_classe_por_categoria` em
+`gerar_dashboard.py` escondia o botão sempre que o item tinha `parcela`
+preenchido (`total_parc > 1`), pensando em evitar o botão nas parcelas
+FUTURAS projetadas em memória (que reaproveitam o `id` da transação real
+e não deveriam ganhar linha própria em `gastos_fixos`). Só que
+`permitir_tornar_fixo` já é passado só pro mês atual (`eh_atual`), e as
+parcelas futuras projetadas nunca caem no mês atual (`_mes_seguinte`
+sempre empurra pra frente) -- ou seja, todo item do mês atual já é uma
+transação real, parcelada ou não. O filtro `not i.get("parcela")` era
+redundante com essa garantia e só atrapalhava. Removido; agora qualquer
+item real do mês atual mostra "→ tornar fixo", mesmo com `1/12` na
+etiqueta. `tornar_fixo` (`app.py`) já usa o valor da parcela em si
+(`abs(amount)` daquela transação) pra semear `gastos_fixos`, então
+funciona igual pra compra à vista ou parcelada.
+
 ### Gasto variável manual em Pix (2026-07-25)
 Nova tabela `gastos_variaveis_manuais` (mes, descricao, valor, categoria,
 forma sempre 'pix') + rota `/variaveis/<mes>` (mesmo padrão de

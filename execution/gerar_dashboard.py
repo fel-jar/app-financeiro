@@ -429,8 +429,12 @@ def render_classe_por_categoria(itens: list[dict], chave_nome: str, permitir_tor
 
     `permitir_tornar_fixo` (só nas Variáveis do mês atual) acrescenta um
     botão "→ fixo" que promove aquela transação real a gasto fixo
-    recorrente -- ver /transacao/<id>/tornar-fixo em app.py. Não se aplica
-    a parcelas futuras (têm `parcela` preenchido)."""
+    recorrente -- ver /transacao/<id>/tornar-fixo em app.py. Aparece mesmo
+    quando `parcela` está preenchido: a linha do mês atual é sempre a
+    transação real (id de verdade), nunca uma parcela futura projetada --
+    essas só entram nos meses seguintes, fora do escopo de
+    `permitir_tornar_fixo`. Uma compra parcelada recorrente (ex.: seguro em
+    12x) também precisa poder virar fixa (achado 2026-07-29)."""
     if not itens:
         return '<p class="vazio">Nenhum lançamento.</p>'
 
@@ -456,7 +460,7 @@ def render_classe_por_categoria(itens: list[dict], chave_nome: str, permitir_tor
                 f'title="Renomear ou recategorizar">✎ editar</a>' if i.get("id") else ""
             )
             tornar_fixo = ""
-            if permitir_tornar_fixo and i.get("id") and not i.get("parcela"):
+            if permitir_tornar_fixo and i.get("id"):
                 tornar_fixo = (
                     f'<form method="post" action="/transacao/{i["id"]}/tornar-fixo" style="display:inline;" '
                     f'onsubmit="return confirm(\'Tornar este lançamento um gasto fixo recorrente?\');">'
