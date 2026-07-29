@@ -37,7 +37,10 @@ CREATE TABLE IF NOT EXISTS transacoes (
     origem TEXT NOT NULL DEFAULT 'pluggy'
 );
 
-CREATE INDEX IF NOT EXISTS idx_transacoes_status ON transacoes(status);
+-- idx_transacoes_status fica só em _migrar() (não aqui): rodar
+-- "CREATE INDEX ... ON transacoes(status)" aqui executaria ANTES do ALTER
+-- TABLE que adiciona a coluna em bancos que já existiam antes dela --
+-- quebrou em produção com "no such column: status" (2026-07-29).
 
 CREATE INDEX IF NOT EXISTS idx_transacoes_date ON transacoes(date);
 CREATE INDEX IF NOT EXISTS idx_transacoes_bill ON transacoes(bill_forecast_date);
