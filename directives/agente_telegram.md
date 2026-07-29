@@ -289,3 +289,60 @@ manual).
 - Nenhum teste automatizado ainda — validado só por leitura de código
   nesta sessão (sem credenciais de e-mail/Pluggy disponíveis pra rodar
   fim-a-fim).
+
+## Sugestão automática na notificação de pendente (2026-07-29)
+
+**Feedback do usuário** depois da 1ª notificação real: a mensagem original
+("Ainda não confirmada pelo banco... responda aqui normalmente.") tinha
+texto redundante (já dava pra saber pelo "🔔 Compra pendente") e pedia pro
+usuário classificar do zero uma compra que ÀS VEZES já é conhecida (ex.:
+TIM — mensalidade de celular já classificada como fixa em meses
+anteriores). Pedido: casar com o histórico primeiro, sugerir tipo de
+gasto/categoria/descrição, e só pedir CONFIRMAÇÃO — sugestão genérica só
+quando não achar nada parecido.
+
+- **`email_pendente.sugerir_classificacao(conexao, descricao)`**: busca
+  por palavras-chave extraídas da descrição (`_palavras_chave` — só
+  alfabéticas, ≥3 letras, das mais longas pras mais curtas; descarta
+  número de telefone/terminal e naturalmente prioriza o nome do
+  estabelecimento sobre o código genérico da processadora, sem precisar
+  de lista de prefixos conhecidos tipo "IFD*"/"MP*"). Duas fontes, nessa
+  ordem:
+  1. `gastos_fixos.nome LIKE` — se já foi marcada fixa antes (usuário já
+     usou "→ fixo" nela), a resposta é direta: `tipo_gasto='fixo'`,
+     categoria e nome vêm de lá.
+  2. `transacoes` confirmadas com `description`/`description_custom
+     LIKE` — se já apareceu antes mas nunca virou fixo, sugere
+     `variável` com a categoria/descrição da ocorrência mais recente; se
+     apareceu em ≥2 meses distintos, acrescenta nota sugerindo marcar
+     como fixo (recorrência não capturada ainda).
+  Sem achado nenhum: sugestão genérica (`variável`/`Outros`/descrição
+  limpa com `.title()`).
+- **Duas mensagens por notificação** (`_montar_mensagens`): a que vai pro
+  Telegram é só cabeçalho + sugestão + "confirma?" (limpa, sem o textão
+  de antes). Uma segunda versão, com um bloco `[contexto interno pro
+  agente...]` grudado (id da transação, tipo/categoria/descrição
+  sugeridos, instrução de qual ferramenta chamar), é gravada direto em
+  `agente_mensagens` (`db.gravar_mensagem_agente`, role `assistant`,
+  mesmo `chat_id` do `.env`) — é isso que faz o agente conversacional
+  (`agente_llm.py`) já ter contexto completo quando o usuário responde só
+  "confirma"/"sim", sem precisar repetir nada. O usuário nunca vê esse
+  bloco (só existe no histórico que alimenta o LLM).
+- **`agente_ferramentas.marcar_como_fixo(transacao_id, nome?,
+  categoria_grande?)`** (ferramenta nova): mesma lógica de
+  `/transacao/<id>/tornar-fixo` do `app.py` (cria linhas em
+  `gastos_fixos` pros próximos `MESES_SEED_FIXOS` meses, ligadas via
+  `transacao_id_origem`), exposta ao LLM — permite corrigir nome/
+  categoria E marcar fixo numa chamada só, em vez de duas.
+- **System prompt** (`agente_llm._system_prompt`): instruído a nunca ler
+  o bloco de contexto interno em voz alta, aplicar `editar_transacao` +
+  (se `tipo_gasto_sugerido == 'fixo'`) `marcar_como_fixo` quando o
+  usuário confirmar, e usar o que a pessoa disser em vez da sugestão se
+  ela corrigir.
+
+### Edge case novo
+- **Falso-positivo de palavra-chave curta** (ex.: um merchant novo cujo
+  nome de 3 letras colide por acaso com outro estabelecimento não
+  relacionado no histórico): a sugestão pode vir errada. Não é
+  destrutivo — é só uma sugestão que o usuário confirma ou corrige na
+  resposta; nenhuma ferramenta de escrita roda sem o "sim" do usuário.

@@ -159,6 +159,69 @@ def editar_transacao(
     }
 
 
+def marcar_como_fixo(
+    transacao_id: str,
+    nome: str | None = None,
+    categoria_grande: str | None = None,
+) -> dict:
+    """Promove uma transação real a gasto fixo recorrente -- mesma lógica de
+    `/transacao/<id>/tornar-fixo` no dashboard (app.py): cria linhas em
+    `gastos_fixos` pro mês atual + próximos meses, ligadas a essa transação
+    (`transacao_id_origem`). A transação original não é apagada nem
+    alterada, só passa a contar como fixa daqui pra frente. `nome`/
+    `categoria_grande` permitem corrigir a classificação na mesma chamada
+    (equivalente a editar_transacao + tornar fixo de uma vez)."""
+    if categoria_grande and categoria_grande not in CATEGORIAS_VALIDAS:
+        return {"erro": f"categoria inválida: {categoria_grande!r}. Use uma de: {', '.join(CATEGORIAS_VALIDAS)}."}
+
+    # import tardio: mesmo motivo de sincronizar_agora (evita ciclo de
+    # import no nível de módulo -- sync importa agente_ferramentas? não,
+    # mas MESES_SEED_FIXOS/_mes_seguinte vêm de sync, e o resto do módulo
+    # já importa sync no topo).
+    from sync import MESES_SEED_FIXOS, _mes_seguinte
+
+    with db.sessao() as conexao:
+        row = conexao.execute(
+            """SELECT account_type, COALESCE(description_custom, description) AS nome_atual,
+                      category, amount, categoria_grande_custom
+               FROM transacoes WHERE id = ?""",
+            (transacao_id,),
+        ).fetchone()
+        if row is None:
+            return {"erro": f"transação {transacao_id!r} não encontrada."}
+
+        if nome:
+            conexao.execute("UPDATE transacoes SET description_custom = ? WHERE id = ?", (nome, transacao_id))
+        if categoria_grande:
+            conexao.execute("UPDATE transacoes SET categoria_grande_custom = ? WHERE id = ?", (categoria_grande, transacao_id))
+
+        nome_final = nome or row["nome_atual"] or "—"
+        forma = "cartao" if row["account_type"] == "CREDIT" else "pix"
+        valor = abs(row["amount"])
+        categoria_final = categoria_grande or row["categoria_grande_custom"] or grande_categoria(traduzir_categoria(row["category"] or "Outros"))
+
+        mes_atual = datetime.now().strftime("%Y-%m")
+        for i in range(MESES_SEED_FIXOS):
+            mes = _mes_seguinte(mes_atual, i)
+            conexao.execute(
+                """INSERT INTO gastos_fixos (mes, nome, forma, valor, categoria, transacao_id_origem)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(mes, nome) DO UPDATE SET forma = excluded.forma,
+                       valor = excluded.valor, categoria = excluded.categoria,
+                       transacao_id_origem = excluded.transacao_id_origem""",
+                (mes, nome_final, forma, valor, categoria_final, transacao_id),
+            )
+
+    return {
+        "sucesso": True,
+        "id": transacao_id,
+        "nome": nome_final,
+        "categoria": categoria_final,
+        "valor": round(valor, 2),
+        "meses_criados": MESES_SEED_FIXOS,
+    }
+
+
 def consultar_painel_mensal() -> dict:
     """Painel mês a mês (mesmo cálculo do dashboard): a partir do mês em
     que a fatura que está fechando agora é paga, fixas/variáveis/caixa
@@ -359,6 +422,28 @@ FERRAMENTAS = [
     {
         "type": "function",
         "function": {
+            "name": "marcar_como_fixo",
+            "description": (
+                "Promove uma transação real a gasto fixo recorrente (cria linhas em "
+                "gastos_fixos pros próximos meses, ligadas a ela). Use quando o usuário "
+                "confirmar que uma compra pendente/recente é uma cobrança recorrente "
+                "(ex.: mensalidade, assinatura) -- pode corrigir nome/categoria na mesma "
+                "chamada em vez de duas chamadas separadas."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "transacao_id": {"type": "string", "description": "id da transação."},
+                    "nome": {"type": "string", "description": "Nome/descrição pra essa despesa fixa (opcional, mantém o atual se omitido)."},
+                    "categoria_grande": {"type": "string", "enum": CATEGORIAS_VALIDAS, "description": "Grande categoria (opcional, mantém a atual se omitida)."},
+                },
+                "required": ["transacao_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "consultar_painel_mensal",
             "description": (
                 "Painel mês a mês: caixa no início do mês, entrada prevista, "
@@ -386,6 +471,7 @@ FERRAMENTAS = [
 EXECUTORES = {
     "consultar_gastos": consultar_gastos,
     "editar_transacao": editar_transacao,
+    "marcar_como_fixo": marcar_como_fixo,
     "consultar_painel_mensal": consultar_painel_mensal,
     "sincronizar_agora": sincronizar_agora,
 }
