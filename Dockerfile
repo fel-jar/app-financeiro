@@ -1,7 +1,11 @@
 FROM python:3.12-slim
 
 ENV TZ=America/Sao_Paulo
-RUN apt-get update && apt-get install -y --no-install-recommends tzdata \
+# ffmpeg: agente_llm.py usa pra converter áudio do Telegram (ogg/opus) pra
+# mp3 antes de mandar pra transcrição via OpenRouter -- sem o binário aqui,
+# a conversão falha silenciosamente (cai no fallback de bytes crus) e a
+# transcrição de voz não funciona de verdade.
+RUN apt-get update && apt-get install -y --no-install-recommends tzdata ffmpeg \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 

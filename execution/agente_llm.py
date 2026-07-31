@@ -10,8 +10,10 @@ scheduler.py, não junto com o gunicorn do dashboard).
 Requer no .env: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID (mesmos do
 telegram_diario.py), OPENROUTER_API_KEY (e opcionalmente OPENROUTER_MODEL).
 """
+import base64
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -77,6 +79,8 @@ def _system_prompt() -> str:
         "de confirmar, use o que ela disser.\n"
         "- Se o usuário pedir pra marcar algo como gasto FIXO recorrente (mensalidade, "
         "assinatura), use marcar_como_fixo.\n"
+        "- Se o usuário pedir para desfazer, reverter ou cancelar um gasto fixo recém-criado, "
+        "use desmarcar_como_fixo no 'id' da transação original.\n"
         "- Perguntas sobre 'o mês fecha', 'dá pra cobrir', projeção de caixa -> use "
         "consultar_painel_mensal.\n"
         "- Se pedirem pra atualizar/sincronizar os dados agora (fora do horário fixo "
@@ -116,6 +120,48 @@ def _baixar_documento_telegram(token: str, file_id: str) -> str:
     with open(destino, "wb") as f:
         f.write(resp.content)
     return destino
+
+
+def _ogg_para_mp3(dados: bytes) -> bytes:
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
+             "-acodec", "libmp3lame", "-f", "mp3", "pipe:1"],
+            input=dados, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+        )
+        return proc.stdout or dados
+    except Exception as exc:
+        print(f"ffmpeg falhou ao converter audio: {exc}")
+        return dados
+
+
+def _baixar_audio_telegram(token: str, file_id: str) -> bytes:
+    info = _telegram("getFile", token, file_id=file_id)
+    file_path = info["result"]["file_path"]
+    resp = requests.get(TELEGRAM_FILE_BASE.format(token=token, file_path=file_path), timeout=60)
+    resp.raise_for_status()
+    return resp.content
+
+
+def _transcrever_audio_openrouter(cliente: openrouter_client.OpenRouterClient, dados: bytes) -> str:
+    dados_mp3 = _ogg_para_mp3(dados)
+    b64 = base64.b64encode(dados_mp3).decode("utf-8")
+    mensagens = [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Transcreva este áudio em português, apenas o texto falado."},
+            {"type": "input_audio", "input_audio": {"data": b64, "format": "mp3"}},
+        ],
+    }]
+    modelo_original = cliente.modelo
+    cliente.modelo = os.getenv("OPENROUTER_AUDIO_MODEL", "google/gemini-2.5-pro")
+    
+    try:
+        resp = cliente.chat(mensagens)
+        return resp.get("content", "").strip()
+    finally:
+        cliente.modelo = modelo_original
+
 
 
 def _executar_ferramenta(nome: str, argumentos_json: str) -> str:
@@ -190,6 +236,8 @@ def processar_atualizacao(cliente, token: str, chat_id_permitido: str, atualizac
     nome_remetente = remetente.get("first_name") or remetente.get("username") or "Alguém"
 
     documento = mensagem.get("document")
+    audio = mensagem.get("voice") or mensagem.get("audio")
+
     if documento:
         nome_arquivo = documento.get("file_name", "")
         if not nome_arquivo.lower().endswith(".pdf"):
@@ -206,10 +254,21 @@ def processar_atualizacao(cliente, token: str, chat_id_permitido: str, atualizac
             f"[{nome_remetente}]: (enviou a fatura {nome_arquivo} pra auditoria) "
             f"Resultado da auditoria automática: {json.dumps(resultado_auditoria, ensure_ascii=False)}"
         )
+    elif audio:
+        try:
+            dados_audio = _baixar_audio_telegram(token, audio["file_id"])
+            texto = _transcrever_audio_openrouter(cliente, dados_audio)
+            if not texto:
+                enviar_mensagem(token, chat_id, "Não consegui transcrever nada deste áudio.")
+                return
+            texto_com_remetente = f"[{nome_remetente}] (Áudio transcrito): {texto}"
+        except Exception as e:
+            enviar_mensagem(token, chat_id, f"Erro ao processar áudio: {e}")
+            return
     else:
         texto = mensagem.get("text")
         if not texto:
-            enviar_mensagem(token, chat_id, "Só entendo texto ou fatura em PDF por enquanto.")
+            enviar_mensagem(token, chat_id, "Só entendo texto, áudio ou fatura em PDF por enquanto.")
             return
         texto_com_remetente = f"[{nome_remetente}]: {texto}"
 

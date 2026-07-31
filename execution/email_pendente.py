@@ -150,7 +150,33 @@ def sugerir_classificacao(conexao, descricao: str) -> dict:
     }
 
 
-def _montar_mensagens(t: dict, sugestao: dict) -> tuple[str, str]:
+def obter_resumo_categoria(conexao, categoria_grande: str) -> str:
+    mes_atual = datetime.now().strftime("%Y-%m")
+    
+    row_limite = conexao.execute(
+        "SELECT limite_mensal FROM orcamento_grande WHERE grande = ?", 
+        (categoria_grande,)
+    ).fetchone()
+    limite = row_limite["limite_mensal"] if row_limite and row_limite["limite_mensal"] else None
+    
+    linhas = conexao.execute(
+        "SELECT category, categoria_grande_custom, amount FROM transacoes WHERE date LIKE ? AND amount < 0",
+        (f"{mes_atual}%",)
+    ).fetchall()
+    
+    total_gasto = 0.0
+    for r in linhas:
+        cat = r["categoria_grande_custom"] or grande_categoria(traduzir_categoria(r["category"] or "Outros"))
+        if cat == categoria_grande:
+            total_gasto += abs(r["amount"])
+            
+    if limite:
+        disponivel = limite - total_gasto
+        return f"\n📊 {categoria_grande} no mês: {fmt_brl(total_gasto)} / {fmt_brl(limite)} (sobra {fmt_brl(disponivel)})"
+    return f"\n📊 {categoria_grande} no mês: {fmt_brl(total_gasto)} (sem teto definido)"
+
+
+def _montar_mensagens(conexao, t: dict, sugestao: dict) -> tuple[str, str]:
     """Devolve (mensagem_telegram, mensagem_para_historico_do_agente).
 
     A do Telegram é só o que o usuário precisa ler. A do histórico tem o
@@ -178,7 +204,8 @@ def _montar_mensagens(t: dict, sugestao: dict) -> tuple[str, str]:
             f"\"{sugestao['descricao_sugerida']}\". Confirma ou corrija."
         )
 
-    mensagem_telegram = f"{cabecalho}\n\n{corpo}"
+    resumo_orcamento = obter_resumo_categoria(conexao, sugestao['categoria'])
+    mensagem_telegram = f"{cabecalho}\n\n{corpo}\n{resumo_orcamento}"
     mensagem_historico = (
         f"{mensagem_telegram}\n"
         f"[contexto interno pro agente, não repita pro usuário: id={t['id']!r}, "
@@ -208,7 +235,8 @@ def checar_email_pendente() -> int:
 
     agora = datetime.now().isoformat()
     for t, sugestao in pendentes_com_sugestao:
-        mensagem_telegram, mensagem_historico = _montar_mensagens(t, sugestao)
+        with db.sessao() as conexao:
+            mensagem_telegram, mensagem_historico = _montar_mensagens(conexao, t, sugestao)
         try:
             enviar_telegram(mensagem_telegram)
         except Exception as e:

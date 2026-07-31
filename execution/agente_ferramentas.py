@@ -222,6 +222,27 @@ def marcar_como_fixo(
     }
 
 
+def desmarcar_como_fixo(transacao_id: str) -> dict:
+    """Desfaz a ação de marcar como fixo (exclui os lançamentos recorrentes
+    em gastos_fixos ligados a essa transação). A transação original
+    continua existindo como variável."""
+    with db.sessao() as conexao:
+        apagados = conexao.execute(
+            "DELETE FROM gastos_fixos WHERE transacao_id_origem = ?",
+            (transacao_id,)
+        ).rowcount
+        
+        if apagados == 0:
+            return {"erro": f"nenhum gasto fixo atrelado à transação {transacao_id!r} encontrado."}
+
+    return {
+        "sucesso": True,
+        "id": transacao_id,
+        "meses_apagados": apagados,
+        "mensagem": "Gasto fixo recorrente cancelado. A compra voltou a ser apenas variável."
+    }
+
+
 def consultar_painel_mensal() -> dict:
     """Painel mês a mês (mesmo cálculo do dashboard): a partir do mês em
     que a fatura que está fechando agora é paga, fixas/variáveis/caixa
@@ -444,6 +465,25 @@ FERRAMENTAS = [
     {
         "type": "function",
         "function": {
+            "name": "desmarcar_como_fixo",
+            "description": (
+                "Desfaz a ação de marcar_como_fixo (exclui os lançamentos recorrentes "
+                "futuros ligados a essa transação). Use quando o usuário pedir para "
+                "desfazer ou cancelar um gasto fixo recém-criado, ou disser que a compra "
+                "não era fixa afinal."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "transacao_id": {"type": "string", "description": "id da transação."},
+                },
+                "required": ["transacao_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "consultar_painel_mensal",
             "description": (
                 "Painel mês a mês: caixa no início do mês, entrada prevista, "
@@ -472,6 +512,7 @@ EXECUTORES = {
     "consultar_gastos": consultar_gastos,
     "editar_transacao": editar_transacao,
     "marcar_como_fixo": marcar_como_fixo,
+    "desmarcar_como_fixo": desmarcar_como_fixo,
     "consultar_painel_mensal": consultar_painel_mensal,
     "sincronizar_agora": sincronizar_agora,
 }

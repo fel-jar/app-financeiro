@@ -5,9 +5,11 @@ dependência externa (sem cron do sistema, sem APScheduler):
   -- é o que dá o "tempo real" (compra aparece pendente minutos depois de
   acontecer, bem antes da Pluggy confirmar). Ver directives/agente_telegram.md,
   seção 2026-07-29.
-- sync.py + telegram_diario.py: 1x/dia, HORARIO_DIARIO.
+- sync.py: 1x/dia, HORARIO_DIARIO (sem resumo diário no Telegram -- removido
+  a pedido do usuário em 2026-07-31, ver directives/agente_telegram.md).
 - telegram_semanal.py: 1x/semana, domingo, logo depois do ciclo diário --
-  fechamento "de verdade" (só transações confirmadas).
+  fechamento "de verdade" (só transações confirmadas), agora o único
+  resumo periódico no Telegram.
 
 Pensado pra rodar como processo/container próprio ("scheduler") separado
 do app web.
@@ -17,7 +19,6 @@ from datetime import datetime, timedelta
 
 import email_pendente
 import sync
-import telegram_diario
 import telegram_semanal
 
 HORARIO_DIARIO = "20:00"  # HH:MM, horário local do container/servidor -- fim do dia (pedido do usuário em 2026-07-25, era 08:00)
@@ -33,12 +34,8 @@ def rodar_ciclo_diario():
         print(f"Erro no sync: {e}")
         return  # não manda Telegram com dado desatualizado se o sync falhou
 
-    print(f"[{datetime.now().isoformat()}] Enviando resumo diário no Telegram...")
-    try:
-        telegram_diario.main()
-    except Exception as e:
-        print(f"Erro ao enviar Telegram (resumo diário): {e}")
-
+    # Só sincroniza (mantém o banco atualizado); o resumo diário no Telegram
+    # foi removido -- o usuário quer só o fechamento semanal (ver diretiva).
     if datetime.now().weekday() == 6:  # domingo
         print(f"[{datetime.now().isoformat()}] Enviando fechamento semanal no Telegram...")
         try:

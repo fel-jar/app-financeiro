@@ -84,8 +84,12 @@ def reconciliar_pendentes_email(conexao):
     Quando casa: herda description_custom/categoria_grande_custom que o
     usuário já tiver corrigido na pendente (senão a correção feita via
     Telegram enquanto a compra ainda não tinha confirmação oficial seria
-    perdida) e apaga a linha pendente -- sem isso a mesma compra contaria
-    duas vezes (uma vinda do e-mail, outra da Pluggy, ids diferentes)."""
+    perdida), marca a transação confirmada com origem='email' -- é o que
+    telegram_semanal.py usa pra saber quais compras da semana já tiveram uma
+    notificação/oportunidade de revisão (o e-mail só cobre o cartão Bradesco,
+    ver directives/agente_telegram.md) -- e apaga a linha pendente -- sem
+    isso a mesma compra contaria duas vezes (uma vinda do e-mail, outra da
+    Pluggy, ids diferentes)."""
     pendentes = conexao.execute(
         """SELECT id, date, amount, description_custom, categoria_grande_custom
            FROM transacoes WHERE status = 'pendente'"""
@@ -116,14 +120,14 @@ def reconciliar_pendentes_email(conexao):
             continue
 
         usadas.add(melhor["id"])
-        if pendente["description_custom"] or pendente["categoria_grande_custom"]:
-            conexao.execute(
-                """UPDATE transacoes SET
-                     description_custom = COALESCE(?, description_custom),
-                     categoria_grande_custom = COALESCE(?, categoria_grande_custom)
-                   WHERE id = ?""",
-                (pendente["description_custom"], pendente["categoria_grande_custom"], melhor["id"]),
-            )
+        conexao.execute(
+            """UPDATE transacoes SET
+                 description_custom = COALESCE(?, description_custom),
+                 categoria_grande_custom = COALESCE(?, categoria_grande_custom),
+                 origem = 'email'
+               WHERE id = ?""",
+            (pendente["description_custom"], pendente["categoria_grande_custom"], melhor["id"]),
+        )
         conexao.execute("DELETE FROM transacoes WHERE id = ?", (pendente["id"],))
         reconciliadas += 1
 

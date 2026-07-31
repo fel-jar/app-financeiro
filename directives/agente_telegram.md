@@ -346,3 +346,79 @@ quando não achar nada parecido.
   relacionado no histórico): a sugestão pode vir errada. Não é
   destrutivo — é só uma sugestão que o usuário confirma ou corrige na
   resposta; nenhuma ferramenta de escrita roda sem o "sim" do usuário.
+
+## Resumo diário removido, só fica o semanal (2026-07-31)
+
+**Pedido do usuário**: tirar o resumo diário (`telegram_diario.py`, 20h) do
+Telegram — o fechamento semanal (`telegram_semanal.py`, domingo) já é o
+número "de verdade" (só confirmadas), e a notificação de compra pendente
+(quase em tempo real, ver seção 2026-07-29 acima) já cobre o "o que tá
+acontecendo agora".
+
+- **`scheduler.rodar_ciclo_diario()`**: não chama mais `telegram_diario.main()`
+  depois do `sync.main()` — só sincroniza e, aos domingos, dispara
+  `telegram_semanal.main()`.
+- **`execution/telegram_diario.py`**: virou só um módulo de utilidades
+  (`fmt_brl`, `enviar_telegram`) reaproveitado por `telegram_semanal.py` e
+  `email_pendente.py` — a função `montar_resumo_diario()`/`main()` foi
+  removida (não tinha mais chamador depois do corte no scheduler). Nome do
+  arquivo mantido de propósito (evitar mexer nos imports de dois outros
+  módulos + nas referências históricas nesta diretiva por uma troca de nome
+  só cosmética).
+
+## Fechamento semanal também sinaliza compra não supervisionada (2026-07-31)
+
+**Pergunta do usuário**: o e-mail (`email_pendente.py`) só cobre o cartão
+Bradesco (MacroDroid encaminha só as notificações do app dele) — compras de
+outras contas/cartões (Nubank, Mercado Pago, os cartões auditados por PDF...)
+nunca passam pela notificação de pendente, então nunca tiveram uma chance de
+revisão humana antes de virar estatística no painel. O fechamento semanal
+precisava discriminar essas.
+
+**Por que não bastou checar `description_custom`/`categoria_grande_custom`
+`IS NULL`**: medido contra o banco real, só 19 das 2967 transações
+confirmadas da história inteira (0,6%) têm algum campo customizado — ou
+seja, quase nada é editado manualmente mesmo quando a categoria automática
+está certa. Usar isso como proxy de "não supervisionada" marcaria ~92% de
+qualquer semana, virando ruído (mensagem gigante, sem sinal).
+
+**Solução**: `transacoes.origem` já existia (`'pluggy'` default / `'email'`
+pra linha pendente) mas nunca era propagado pra transação confirmada depois
+da reconciliação. `sync.reconciliar_pendentes_email` (linha ~118-127) agora
+marca `origem = 'email'` na transação confirmada sempre que ela casa com uma
+pendente vinda do e-mail — é um fato permanente e barato ("essa compra teve
+uma notificação/oportunidade de revisão"), diferente de customização (que é
+opcional e rara mesmo quando a revisão aconteceu).
+
+- **`telegram_semanal.montar_resumo_semanal()`**: "supervisionada" agora é
+  `origem == 'email'` OU tem `description_custom`/`categoria_grande_custom`
+  preenchido (edição manual conta como revisão, mesmo sem ter vindo pelo
+  e-mail). O resto lista `data`, `descrição`, `categoria automática (crua da
+  Pluggy)` e `valor`, com um cabeçalho `👀 N compra(s) ainda não
+  supervisionada(s)`. Capado em 20 linhas (`+ e mais N.` senão) pra não
+  estourar o limite de 4096 caracteres do Telegram numa semana ruidosa.
+- **Limitação conhecida**: o marcador só existe daqui pra frente — histórico
+  reconciliado ANTES dessa mudança tem `origem = 'pluggy'` mesmo quando veio
+  do Bradesco, então vai aparecer como "não supervisionada" indevidamente
+  até a janela de dados girar (sem backfill, não vale reescrever histórico
+  por uma métrica de exibição).
+- **Fechamento semanal também passou a agrupar pela GRANDE categoria** (com
+  orçamento mensal ao lado de cada uma) -- ver seção logo abaixo.
+
+**Gasto no mês x orçamento na notificação de compra pendente**: pedido
+relacionado do usuário, já resolvido pelo `email_pendente.obter_resumo_categoria()`
+(seção acima) — toda notificação de compra pendente já mostra `📊 {categoria}
+no mês: {gasto} / {limite} (sobra {valor})`, ou "sem teto definido" quando a
+grande categoria não tem `orcamento_grande.limite_mensal` configurado.
+
+**Fechamento semanal também ganhou o orçamento por categoria** (mesmo pedido,
+estendido ao `telegram_semanal.py`): a lista de categorias da semana era
+agrupada pela categoria FINA da Pluggy (`traduzir_categoria(category)`), que
+não bate com a granularidade em que o orçamento existe (`orcamento_grande`,
+por GRANDE categoria — Mercado, Casa, Lazer...). Trocado para agrupar do
+mesmo jeito que o painel e a notificação de pendente já fazem
+(`categoria_grande_custom` ou `grande_categoria(traduzir_categoria(category))`)
+e cada linha agora mostra `{grande}: {total_da_semana} (orçamento mensal:
+{limite})`, ou "sem orçamento definido" quando a grande categoria não tem
+teto. Reaproveita `dados_db.carregar_orcamento_por_grande()` (já existia,
+usado pelo painel) em vez de duplicar a query de limites.
