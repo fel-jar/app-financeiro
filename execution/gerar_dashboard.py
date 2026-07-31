@@ -204,6 +204,7 @@ def construir_panorama_mensal(
 
     fixas_mes_atual = _fixas_do_mes(mes_atual, gastos_fixos_por_mes)
     ids_convertidos_em_fixo = {f["transacao_id_origem"] for f in fixas_mes_atual if f.get("transacao_id_origem")}
+    nomes_convertidos_em_fixo = {f["nome"] for f in fixas_mes_atual if f.get("forma") == "cartao"}
 
     # Pré-processamento: descobre parcelamentos estornados (mesma descrição
     # ORIGINAL -- nunca a customizada, ver achado abaixo -- de uma
@@ -247,12 +248,12 @@ def construir_panorama_mensal(
         meta = t.get("creditCardMetadata")
         if not meta or t.get("type") != "DEBIT" or t["amount"] >= 0:
             continue
-        if t.get("id") in ids_convertidos_em_fixo:
+        descricao = t.get("description") or t.get("descriptionRaw") or "—"
+        if t.get("id") in ids_convertidos_em_fixo or descricao in nomes_convertidos_em_fixo:
             continue
         descricao_chave = t.get("descriptionRaw") or t.get("description") or ""
         if descricao_chave in descricoes_estornadas:
             continue
-        descricao = t.get("description") or t.get("descriptionRaw") or "—"
         bill_raw = meta.get("billForecastDate") or t["date"][:7]
         mes_pagamento = _mes_seguinte(bill_raw, 1)
         atual_parc, total_parc = meta.get("installmentNumber"), meta.get("totalInstallments")
