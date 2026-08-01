@@ -703,6 +703,24 @@ superestimado/subestimado e o "cobre/não cobre" saía errado. Corrigido em
   painel -- regressão pior que o bug original. Corrigido com fallback:
   `bill_raw = meta.get("billForecastDate") or t["date"][:7]` (cai de volta
   na data da própria compra quando a Pluggy não informa a fatura).
+- **Atualização 2026-08-01 -- fallback melhorado com dia de fechamento
+  configurado por cartão**: a frequência do nulo varia MUITO por cartão,
+  não é uniforme (medido contra o banco real): 82% no ELO NANQUIM PRIME
+  (final 4921), 27% no THE PLATINUM CARD (final 3543), 17% no VISA
+  INFINITE PRIME (final 0808), 0% no Mercado Pago e no cartão "platinum"
+  extra. Investiguei se dava pra pegar o fechamento pela própria API
+  (`GET /accounts` → `creditData.balanceCloseDate`) em vez de cair direto
+  na data da compra -- não dá, o campo vem sempre `null` pros 5 cartões
+  conectados aqui (só `balanceDueDate`, o vencimento, vem preenchido).
+  Solução: dia de fechamento configurado manualmente por cartão
+  (confirmado pelo usuário contra a fatura real), em
+  `execution/fechamento_cartoes.py::FECHAMENTO_POR_CARTAO`, usado como
+  fallback ANTES de cair na data crua da compra -- só entra em último caso
+  se o cartão nem estiver mapeado. Validado contra as 460 transações reais
+  com `billForecastDate` nulo no banco (0 inconsistências, 107 mudaram de
+  mês de fatura). Ver
+  `docs/superpowers/specs/2026-08-01-fechamento-fatura-fallback-design.md`
+  pro desenho completo.
 - **Painel deixou de mostrar o mês corrente do calendário**: a pedido do
   usuário ("não quero saber da projeção do passado mês a mês, quero só o
   que vou pagar de agosto pra frente"), o primeiro card do painel agora é
