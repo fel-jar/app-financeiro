@@ -14,6 +14,7 @@ from email_source import buscar_transacoes as buscar_transacoes_email
 from gastos_fixos import GASTOS_FIXOS, valor_planejamento, total_fixo_mensal
 from normalizacao import traduzir_categoria, normalizar_transacoes_pluggy, CATEGORIA_RENDA_EXTRA
 from categorias_grandes import grande_categoria
+from fechamento_cartoes import mes_fechamento
 import graficos
 import ui
 # Reexportados: app.py e telegram_diario.py importam a formatação daqui
@@ -168,8 +169,13 @@ def construir_panorama_mensal(
     Pluggy chama de "julho" é paga em agosto), por isso todo `bill` é
     deslocado +1 mês (`_mes_seguinte(bill, 1)`) antes de virar chave do
     painel. Transação de cartão sem `billForecastDate` (acontece bastante
-    nos dados reais -- ver achado 2026-07-25) cai de volta na data da
-    própria compra, pra nunca sumir uma despesa real do painel.
+    nos dados reais, com frequência bem diferente por cartão -- ver achado
+    2026-07-25) usa o dia de fechamento configurado em
+    `fechamento_cartoes.FECHAMENTO_POR_CARTAO` como fallback (achado
+    2026-08-01: a Pluggy também não expõe o fechamento no objeto da conta,
+    `creditData.balanceCloseDate` vem sempre `null`). Só cartão fora desse
+    mapa cai de volta na data crua da própria compra, pra nunca sumir uma
+    despesa real do painel.
 
     Variáveis = só parcelas de cartão já comprometidas (não é estimativa
     nova -- a API guarda um "retrato" da parcela em cada fatura já
@@ -254,7 +260,7 @@ def construir_panorama_mensal(
         descricao_chave = t.get("descriptionRaw") or t.get("description") or ""
         if descricao_chave in descricoes_estornadas:
             continue
-        bill_raw = meta.get("billForecastDate") or t["date"][:7]
+        bill_raw = meta.get("billForecastDate") or mes_fechamento(t.get("accountId"), t["date"]) or t["date"][:7]
         mes_pagamento = _mes_seguinte(bill_raw, 1)
         atual_parc, total_parc = meta.get("installmentNumber"), meta.get("totalInstallments")
         valor = abs(t["amount"])
