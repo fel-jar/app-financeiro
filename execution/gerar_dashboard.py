@@ -296,7 +296,30 @@ def construir_panorama_mensal(
                 "parcela": f"{maior_ja_realizada + i}/{total_parc}",
             })
 
-    mes_pagamento_atual = _mes_seguinte(mes_atual, 1)
+    # Despesas não-cartão (PIX, boletos, débitos em conta) agrupadas pelo
+    # mês da compra — entram nas Variáveis de cada mês junto com o cartão.
+    # Cartão é quando vai ser pago; não-cartão é quando saiu da conta.
+    despesas_nao_cartao_por_mes: dict = defaultdict(list)
+    for t in transacoes:
+        if t["amount"] >= 0:
+            continue
+        if t.get("creditCardMetadata"):
+            continue
+        if t.get("id") in ids_convertidos_em_fixo:
+            continue
+        mes_compra = t["date"][:7]
+        categoria_pt = traduzir_categoria(t.get("category") or "Outros")
+        grande = t.get("categoriaGrandeCustom") or grande_categoria(categoria_pt)
+        despesas_nao_cartao_por_mes[mes_compra].append({
+            "id": t.get("id"),
+            "descricao": t.get("description") or t.get("descriptionRaw") or "—",
+            "categoria": categoria_pt,
+            "categoria_grande": grande,
+            "valor": abs(t["amount"]),
+            "parcela": None,
+        })
+
+    mes_pagamento_atual = mes_atual
     meses_ordenados = [mes_pagamento_atual] + [_mes_seguinte(mes_pagamento_atual, i) for i in range(1, meses_futuros + 1)]
 
     linhas = []
@@ -306,6 +329,7 @@ def construir_panorama_mensal(
         fixas_total = sum(it["valor"] for it in fixas_itens)
 
         variaveis_itens = list(despesas_cartao_por_pagamento.get(mes, []))
+        variaveis_itens.extend(despesas_nao_cartao_por_mes.get(mes, []))
         manuais_mes = [
             {**it, "categoria_grande": it["categoria"]}
             for it in (variaveis_manuais_por_mes or {}).get(mes, [])
@@ -660,7 +684,7 @@ def render_mes_panorama(linha: dict, aberto: bool) -> str:
         permitir_tornar_fixo=linha.get("eh_atual", False),
         editar_href=f"/variaveis/{linha['mes']}",
     )
-    marcador_atual = '<span class="badge neutro">próxima fatura</span>' if linha.get("eh_atual") else ""
+    marcador_atual = '<span class="badge neutro">mês atual</span>' if linha.get("eh_atual") else ""
 
     return f"""
   <details class="card mes-panorama"{open_attr}>
@@ -820,24 +844,6 @@ CSS_DASHBOARD = """
   .historico > summary:hover { color: var(--text-primary); }
   .historico { border-bottom: none; }
 
-  /* --- Card do mês atual -------------------------------------------- */
-  .mes-atual {
-    border-color: var(--border-forte); background: var(--surface-2);
-  }
-  .mes-atual > summary { background: var(--surface-2); }
-
-  .toggle-mes-atual {
-    display: inline-flex; align-items: center; gap: 5px;
-    font-size: 12px; color: var(--text-secondary); cursor: pointer;
-    background: none; border: 1px solid var(--border); border-radius: var(--r-sm);
-    padding: 5px 10px; font-family: inherit; margin-left: 12px;
-  }
-  .toggle-mes-atual:hover {
-    background: var(--surface-2); color: var(--text-primary);
-    border-color: var(--border-forte);
-  }
-  .toggle-mes-atual.oculto { opacity: 0.6; }
-
   @media (max-width: 560px) {
     .topo-inner { flex-direction: column; align-items: flex-start; gap: 10px; }
     .mes-panorama > summary { flex-wrap: wrap; }
@@ -988,18 +994,8 @@ def montar_html(
         if comparativo["anterior"] else "sem base de comparação no mês anterior"
     )
 
-    # Card do mês atual (fixas + despesas não-cartão) — construído aqui
-    # porque precisa do comparativo pra mostrar o total real do mês no
-    # resumo e o chip de variação.
-    hoje = datetime.now()
-    card_mes_atual = construir_card_mes_atual(
-        transacoes, mes_atual, gastos_fixos_por_mes, variaveis_manuais_por_mes,
-    )
-    if card_mes_atual is not None:
-        card_mes_atual["comparativo"] = comparativo
-        card_mes_atual["chip"] = chip_comparativo
-        card_mes_atual["nota_comparativo"] = nota_comparativo
-    card_mes_atual_html = render_card_mes_atual(card_mes_atual, aberto=hoje.day <= 10)
+    # Card do mês atual removido — o mês corrente agora é o primeiro card
+    # do panorama, igual aos demais (ver construir_panorama_mensal).
 
     # --- Veredito: a resposta em uma frase --------------------------
     # O veredito é o herói da página: o número que decide vive DENTRO da
@@ -1147,7 +1143,6 @@ def montar_html(
     <p>Cada card abre a lista completa do mês. É aqui que você edita: renomear uma compra,
        promover um gasto a fixo, incluir um pix que não passa pelo banco.</p>
   </section>
-  {card_mes_atual_html}
   {painel_meses_html}
 
   <section class="secao"><h2>Diagnóstico</h2></section>
@@ -1204,37 +1199,7 @@ def montar_html(
         cabecalho_html,
         corpo,
         css_extra=graficos.CSS_GRAFICOS + CSS_DASHBOARD,
-        script_extra=(
-            "// Toggle do mês atual\n"
-            "(function(){\n"
-            " var c=document.getElementById('card-mes-atual');\n"
-            " if(!c)return;\n"
-            " var d=new Date().getDate();\n"
-            " var k='dashboard-mes-atual-visivel';\n"
-            " var s=localStorage.getItem(k);\n"
-            " var v=s!==null?s==='true':d<=10;\n"
-            " if(!v)c.open=false;\n"
-            " var sec=document.querySelectorAll('.secao');\n"
-            " for(var i=0;i<sec.length;i++){\n"
-            "  var h=sec[i].querySelector('h2');\n"
-            "  if(h&&h.textContent.indexOf('Panorama')!==-1){\n"
-            "   var b=document.createElement('button');\n"
-            "   b.className='toggle-mes-atual'+(v?'':' oculto');\n"
-            "   b.textContent=(v?'◉':'○')+' Mês atual';\n"
-            "   b.title='Mostrar / ocultar o card do mês corrente';\n"
-            "   b.onclick=function(){\n"
-            "    var a=!c.open;\n"
-            "    c.open=a;\n"
-            "    b.textContent=(a?'◉':'○')+' Mês atual';\n"
-            "    b.className='toggle-mes-atual'+(a?'':' oculto');\n"
-            "    try{localStorage.setItem(k,String(a));}catch(e){}\n"
-            "   };\n"
-            "   h.insertAdjacentElement('afterend',b);\n"
-            "   break;\n"
-            "  }\n"
-            " }\n"
-            "})();"
-        ),
+        script_extra="",
     )
 
 
